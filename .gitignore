@@ -32,7 +32,6 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
-*.svg
 *.folded
 *.perf
 *.log
