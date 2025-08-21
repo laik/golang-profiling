@@ -1,0 +1,13 @@
+[build]
+rustflags = [
+    "-A", "unused_unsafe",
+    "-A", "unsafe_op_in_unsafe_fn",
+    "-A", "unused_imports"
+]
+
+[target.bpfel-unknown-none]
+rustflags = [
+    "-A", "unused_unsafe",
+    "-A", "unsafe_op_in_unsafe_fn",
+    "-A", "unused_imports"
+]

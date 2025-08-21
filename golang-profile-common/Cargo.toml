@@ -1,0 +1,16 @@
+[package]
+name = "golang-profile-common"
+version = "0.1.0"
+edition.workspace = true
+
+license.workspace = true
+
+[dependencies]
+aya = { workspace = true, optional = true }
+
+[features]
+default = []
+user = ["aya", "std"]
+std = []
+
+[lib]

@@ -1,0 +1,25 @@
+[package]
+name = "golang-profile-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[profile.dev]
+opt-level = 2
+panic = "abort"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+
+[dependencies]
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+golang-profile-common = { path = "../golang-profile-common" }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "golang-profile"
+path = "src/main.rs"
