@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "golang-profile",
-    "golang-profile-common",
-    "golang-profile-ebpf",
+    "golang-profiling",
+    "golang-profiling-common",
+    "golang-profiling-ebpf",
 ]
-default-members = ["golang-profile", "golang-profile-common"]
+default-members = ["golang-profiling", "golang-profiling-common"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
@@ -35,9 +35,9 @@ panic = "abort"
 [profile.dev]
 panic = "abort"
 
-[profile.release.package.golang-profile-ebpf]
+[profile.release.package.golang-profiling-ebpf]
 debug = 2
 codegen-units = 1
 
-[profile.dev.package.golang-profile-ebpf]
+[profile.dev.package.golang-profiling-ebpf]
 opt-level = 2

@@ -7,7 +7,7 @@ use aya::{
 };
 use aya_log::EbpfLogger;
 use clap::Parser;
-use golang_profile_common::{
+use golang_profiling_common::{
     GoRuntimeInfo, ProfileKey, EbpfProfileKey,
 };
 use log::{info, warn, error};
@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
     // Load eBPF program
     let mut ebpf = Ebpf::load(aya::include_bytes_aligned!(concat!(
         env!("OUT_DIR"),
-        "/golang-profile"
+        "/golang-profiling"
     )))?;
     
     if let Err(e) = EbpfLogger::init(&mut ebpf) {

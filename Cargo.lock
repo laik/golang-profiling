@@ -441,7 +441,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
-name = "golang-profile"
+name = "golang-profiling"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -451,8 +451,8 @@ dependencies = [
  "byteorder",
  "clap",
  "env_logger",
- "golang-profile-common",
- "golang-profile-ebpf",
+ "golang-profiling-common",
+ "golang-profiling-ebpf",
  "libc",
  "log",
  "memmap2",
@@ -463,19 +463,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "golang-profile-common"
+name = "golang-profiling-common"
 version = "0.1.0"
 dependencies = [
  "aya",
 ]
 
 [[package]]
-name = "golang-profile-ebpf"
+name = "golang-profiling-ebpf"
 version = "0.1.0"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
- "golang-profile-common",
+ "golang-profiling-common",
  "which",
 ]
 

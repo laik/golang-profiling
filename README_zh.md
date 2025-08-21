@@ -1,4 +1,4 @@
-# golang-profile
+# golang-profiling
 
 [English](README.md) | 中文文档
 
@@ -98,13 +98,13 @@ cargo build
 
 ```bash
 # 分析指定 PID 的进程，持续 10 秒
-sudo ./target/release/golang-profile --pid 1234 --duration 10
+sudo ./target/release/golang-profiling --pid 1234 --duration 10
 
 # 分析指定名称的进程
-sudo ./target/release/golang-profile --process-name "my-go-app" --duration 5
+sudo ./target/release/golang-profiling --process-name "my-go-app" --duration 5
 
 # 自定义输出文件名
-sudo ./target/release/golang-profile --pid 1234 --output my-profile.svg
+sudo ./target/release/golang-profiling --pid 1234 --output my-profile.svg
 ```
 
 ### 完整参数说明
@@ -143,7 +143,7 @@ sudo ./target/release/golang-profile --pid 1234 --output my-profile.svg
 
 ```bash
 # 分析 PID 为 1234 的进程，持续 30 秒
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
     --pid 1234 \
     --duration 30 \
     --output app-profile.svg
@@ -153,7 +153,7 @@ sudo ./target/release/golang-profile \
 
 ```bash
 # 生成带有自定义标题和颜色的火焰图
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
     --pid 1234 \
     --duration 10 \
     --title "我的应用性能分析" \
@@ -169,7 +169,7 @@ sudo ./target/release/golang-profile \
 
 ```bash
 # 分析名为 "my-go-service" 的进程
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
     --process-name "my-go-service" \
     --duration 15 \
     --frequency 199 \
@@ -180,7 +180,7 @@ sudo ./target/release/golang-profile \
 
 ```bash
 # 同时生成火焰图和导出折叠堆栈数据
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
     --pid 1234 \
     --duration 10 \
     --output profile.svg \
@@ -191,7 +191,7 @@ sudo ./target/release/golang-profile \
 
 ```bash
 # 生成冰柱图，适合分析调用链
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
     --pid 1234 \
     --duration 10 \
     --inverted \

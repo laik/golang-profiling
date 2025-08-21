@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use golang_profile_common::GoRuntimeInfo;
+use golang_profiling_common::GoRuntimeInfo;
 use log::{debug, info, warn};
 use memmap2::Mmap;
 use object::{Object, ObjectSection, ObjectSymbol};

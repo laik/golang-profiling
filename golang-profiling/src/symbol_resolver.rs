@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use golang_profile_common::{GoRuntimeInfo, FuncInfo, StackFrame};
+use golang_profiling_common::{GoRuntimeInfo, FuncInfo, StackFrame};
 use log::{debug, info, warn};
 use memmap2::Mmap;
 use object::{Object, ObjectSection, ObjectSymbol};
@@ -518,7 +518,7 @@ impl SymbolResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golang_profile_common::{StackFrame, FuncInfo};
+    use golang_profiling_common::{StackFrame, FuncInfo};
     use std::io::{Cursor, Write};
     use byteorder::{LittleEndian, WriteBytesExt};
 

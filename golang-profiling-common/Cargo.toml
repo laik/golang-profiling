@@ -1,5 +1,5 @@
 [package]
-name = "golang-profile-common"
+name = "golang-profiling-common"
 version = "0.1.0"
 edition.workspace = true
 

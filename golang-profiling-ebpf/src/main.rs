@@ -9,7 +9,7 @@ use aya_ebpf::{
     programs::PerfEventContext,
     EbpfContext,
 };
-use golang_profile_common::{EbpfProfileKey, SampleEvent, StackFrame, GoRuntimeInfo, SAMPLE_TYPE_ON_CPU, MAX_STACK_DEPTH};
+use golang_profiling_common::{EbpfProfileKey, SampleEvent, StackFrame, GoRuntimeInfo, SAMPLE_TYPE_ON_CPU, MAX_STACK_DEPTH};
 
 mod vmlinux;
 

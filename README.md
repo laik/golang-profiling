@@ -1,4 +1,4 @@
-# golang-profile
+# golang-profiling
 
 [中文文档](README_zh.md) | English
 
@@ -70,7 +70,7 @@ cd golang-profile
 cargo build --release
 ```
 
-The compiled binary will be available at `target/release/golang-profile`.
+The compiled binary will be available at `target/release/golang-profiling`.
 
 ## 📖 Usage
 
@@ -78,13 +78,13 @@ The compiled binary will be available at `target/release/golang-profile`.
 
 ```bash
 # Profile by PID
-sudo ./target/release/golang-profile --pid 1234 --duration 10 --output profile.svg
+sudo ./target/release/golang-profiling --pid 1234 --duration 10 --output profile.svg
 
 # Profile by process name
-sudo ./target/release/golang-profile --name "my-go-app" --duration 30 --output app_profile.svg
+sudo ./target/release/golang-profiling --name "my-go-app" --duration 30 --output app_profile.svg
 
 # System-wide profiling
-sudo ./target/release/golang-profile --duration 5 --output system_profile.svg
+sudo ./target/release/golang-profiling --duration 5 --output system_profile.svg
 ```
 
 ### Command Line Options
@@ -119,17 +119,17 @@ sudo ./target/release/golang-profile --duration 5 --output system_profile.svg
 
 #### 1. Basic Process Profiling
 ```bash
-sudo ./target/release/golang-profile --pid 1234 --duration 10 --output basic_profile.svg
+sudo ./target/release/golang-profiling --pid 1234 --duration 10 --output basic_profile.svg
 ```
 
 #### 2. High-Frequency Sampling
 ```bash
-sudo ./target/release/golang-profile --name "my-service" --frequency 199 --duration 30 --output detailed_profile.svg
+sudo ./target/release/golang-profiling --name "my-service" --frequency 199 --duration 30 --output detailed_profile.svg
 ```
 
 #### 3. Custom Styled Flame Graph
 ```bash
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
   --pid 1234 \
   --duration 15 \
   --title "Production Service Profile" \
@@ -143,12 +143,12 @@ sudo ./target/release/golang-profile \
 
 #### 4. Inverted Flame Graph (Icicle Graph)
 ```bash
-sudo ./target/release/golang-profile --pid 1234 --inverted --title "Icicle Graph" --output icicle.svg
+sudo ./target/release/golang-profiling --pid 1234 --inverted --title "Icicle Graph" --output icicle.svg
 ```
 
 #### 5. Export Both SVG and Folded Format
 ```bash
-sudo ./target/release/golang-profile \
+sudo ./target/release/golang-profiling \
   --pid 1234 \
   --duration 20 \
   --output profile.svg \

@@ -1,5 +1,5 @@
 [package]
-name = "golang-profile-ebpf"
+name = "golang-profiling-ebpf"
 version = "0.1.0"
 edition.workspace = true
 
@@ -15,11 +15,11 @@ panic = "abort"
 [dependencies]
 aya-ebpf = { workspace = true }
 aya-log-ebpf = { workspace = true }
-golang-profile-common = { path = "../golang-profile-common" }
+golang-profiling-common = { path = "../golang-profiling-common" }
 
 [build-dependencies]
 which = { workspace = true }
 
 [[bin]]
-name = "golang-profile"
+name = "golang-profiling"
 path = "src/main.rs"
