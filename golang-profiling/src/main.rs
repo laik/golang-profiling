@@ -18,8 +18,13 @@ use std::{
     process,
     sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
     time::Duration,
+    fs,
+    io::Write,
 };
 use tokio::{signal, time};
+
+// Embed the flamegraph.pl script at compile time
+const FLAMEGRAPH_SCRIPT: &str = include_str!("../../flamegraph.pl");
 
 mod golang_parser;
 mod symbol_resolver;
@@ -308,50 +313,56 @@ async fn main() -> anyhow::Result<()> {
     let folded_file = "stacks.folded";
     exporter.export_folded_stacks(&converted_data, std::path::Path::new(folded_file), &*resolver)?;
     
-    // Use flamegraph.pl to generate SVG with custom parameters
-     let mut cmd = std::process::Command::new("perl");
-     cmd.arg("flamegraph.pl");
-     
-     // Add custom parameters
-     cmd.arg("--title").arg(&args.title);
-     
-     if let Some(subtitle) = &args.subtitle {
-         cmd.arg("--subtitle").arg(subtitle);
-     }
-     
-     cmd.arg("--colors").arg(&args.colors);
-     
-     if let Some(bgcolors) = &args.bgcolors {
-         cmd.arg("--bgcolors").arg(bgcolors);
-     }
-     
-     cmd.arg("--width").arg(args.width.to_string());
-     cmd.arg("--height").arg(args.height.to_string());
-     cmd.arg("--fonttype").arg(&args.fonttype);
-     cmd.arg("--fontsize").arg(args.fontsize.to_string());
-     
-     if args.inverted {
-         cmd.arg("--inverted");
-     }
-     
-     if args.flamechart {
-         cmd.arg("--flamechart");
-     }
-     
-     if args.hash {
-         cmd.arg("--hash");
-     }
-     
-     if args.random {
-         cmd.arg("--random");
-     }
-     
-     cmd.arg(folded_file);
-     
-     let output = cmd.output()?;
+    // Use embedded flamegraph.pl script to generate SVG
+    let temp_script_path = "/tmp/flamegraph_embedded.pl";
+    fs::write(temp_script_path, FLAMEGRAPH_SCRIPT)?;
+    
+    let mut cmd = std::process::Command::new("perl");
+    cmd.arg(temp_script_path);
+    
+    // Add custom parameters
+    cmd.arg("--title").arg(&args.title);
+    
+    if let Some(subtitle) = &args.subtitle {
+        cmd.arg("--subtitle").arg(subtitle);
+    }
+    
+    cmd.arg("--colors").arg(&args.colors);
+    
+    if let Some(bgcolors) = &args.bgcolors {
+        cmd.arg("--bgcolors").arg(bgcolors);
+    }
+    
+    cmd.arg("--width").arg(args.width.to_string());
+    cmd.arg("--height").arg(args.height.to_string());
+    cmd.arg("--fonttype").arg(&args.fonttype);
+    cmd.arg("--fontsize").arg(args.fontsize.to_string());
+    
+    if args.inverted {
+        cmd.arg("--inverted");
+    }
+    
+    if args.flamechart {
+        cmd.arg("--flamechart");
+    }
+    
+    if args.hash {
+        cmd.arg("--hash");
+    }
+    
+    if args.random {
+        cmd.arg("--random");
+    }
+    
+    cmd.arg(folded_file);
+    
+    let output = cmd.output()?;
+    
+    // Clean up temporary script file
+    let _ = fs::remove_file(temp_script_path);
     
     if !output.status.success() {
-        anyhow::bail!("Failed to generate flame graph with flamegraph.pl: {}", 
+        anyhow::bail!("Failed to generate flame graph with embedded flamegraph.pl: {}", 
             String::from_utf8_lossy(&output.stderr));
     }
     
