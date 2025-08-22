@@ -2,34 +2,38 @@
 #![no_main]
 
 use aya_ebpf::{
-    bindings::BPF_F_CURRENT_CPU,
-    helpers::{bpf_get_current_pid_tgid, bpf_get_current_comm},
+    helpers::bpf_get_current_pid_tgid,
     macros::{map, perf_event},
-    maps::{HashMap, PerCpuArray, PerfEventArray, StackTrace},
+    maps::{Array, HashMap, StackTrace},
     programs::PerfEventContext,
-    EbpfContext,
 };
-use golang_profiling_common::{EbpfProfileKey, SampleEvent, StackFrame, GoRuntimeInfo, SAMPLE_TYPE_ON_CPU, MAX_STACK_DEPTH};
+use aya_log_ebpf::info;
+use golang_profiling_common::EbpfProfileKey;
 
-mod vmlinux;
+// eBPF program metadata
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+static _license: &[u8] = b"GPL";
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+static _version: u32 = 0xFFFFFFFE;
 
 // BPF constants
 const BPF_F_USER_STACK: u64 = 1 << 8;
 
-// Stack trace storage - similar to BCC's BPF_STACK_TRACE
+// Optimized map sizes for better memory usage
+// Stack trace storage - reduced from 16384 to 8192 for memory efficiency
 #[map]
-static STACK_TRACES: StackTrace = StackTrace::with_max_entries(16384, 0);
+static STACK_TRACES: StackTrace = StackTrace::with_max_entries(8192, 0);
 
-// Aggregated counts - using eBPF profile key
+// Aggregated counts - reduced from 40960 to 16384 for single PID profiling
 #[map]
-static COUNTS: HashMap<EbpfProfileKey, u64> = HashMap::with_max_entries(40960, 0);
+static COUNTS: HashMap<EbpfProfileKey, u64> = HashMap::with_max_entries(16384, 0);
 
-// Events for sending aggregated data to userspace
+// Target PID configuration - using Array for single value storage
 #[map]
-static EVENTS: PerfEventArray<SampleEvent> = PerfEventArray::new(0);
-
-#[map]
-static GO_RUNTIME_INFO: HashMap<u32, GoRuntimeInfo> = HashMap::with_max_entries(1024, 0);
+static TARGET_PID: Array<u32> = Array::with_max_entries(1, 0);
 
 #[perf_event]
 pub fn golang_profile(ctx: PerfEventContext) -> u32 {
@@ -42,43 +46,52 @@ pub fn golang_profile(ctx: PerfEventContext) -> u32 {
 unsafe fn try_golang_profile(ctx: PerfEventContext) -> Result<u32, u32> {
     let pid_tgid = bpf_get_current_pid_tgid();
     let tgid = (pid_tgid >> 32) as u32;
-    let _pid = pid_tgid as u32;
     
-    // Skip idle process (PID 0) by default
+    // Skip idle process (PID 0)
     if tgid == 0 {
         return Ok(0);
     }
     
+    // Check if we have a target PID configured and filter accordingly
+    if let Some(target_pid) = TARGET_PID.get(0) {
+        // Debug output disabled for production use
+        // info!(&ctx, "Current PID: {}, Target PID: {}", tgid, *target_pid);
+        
+        // If target_pid is 0, it means no filtering (profile all processes)
+        // Otherwise, only profile the specified PID
+        if *target_pid != 0 && tgid != *target_pid {
+            return Ok(0);
+        }
+        
+        // Debug: print when we match the target PID
+        if *target_pid != 0 && tgid == *target_pid {
+            // bpf_printk!("Matched target PID: %u", tgid);
+        }
+    }
+    // If TARGET_PID.get(0) returns None, we allow all processes (no filtering)
+    
     // Get stack traces
-    let user_stack_id = unsafe {
-        STACK_TRACES.get_stackid(&ctx, BPF_F_USER_STACK)
-    }.unwrap_or(-1) as i32;
+    let user_stack_id = STACK_TRACES.get_stackid(&ctx, BPF_F_USER_STACK)
+        .unwrap_or(-1) as i32;
     
-    let kernel_stack_id = unsafe {
-        STACK_TRACES.get_stackid(&ctx, 0)
-    }.unwrap_or(-1) as i32;
+    let kernel_stack_id = STACK_TRACES.get_stackid(&ctx, 0)
+        .unwrap_or(-1) as i32;
     
-    // Create profile key with stack information
+    // Create profile key
     let key = EbpfProfileKey {
         pid: tgid,
         user_stack_id,
         kernel_stack_id,
     };
     
-    // For now, just count by PID to avoid complex stack operations
-    // In a production version, we would implement more sophisticated aggregation
-    
-    // Increment count for this process
+    // Increment count
     let count = COUNTS.get(&key).copied().unwrap_or(0);
     let _ = COUNTS.insert(&key, &(count + 1), 0);
     
     Ok(0)
 }
 
-// Stack unwinding is now handled in userspace
-// eBPF only collects basic sampling data
-
-// Removed complex goroutine functions to reduce eBPF program size
+// Optimized for aya framework - minimal eBPF program
 
 #[cfg(not(test))]
 #[panic_handler]

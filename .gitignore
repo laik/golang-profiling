@@ -43,3 +43,4 @@ Thumbs.db
 
 # FlameGraph repository (if using as submodule)
 FlameGraph/
+etcd-v3.6.4-linux-amd64/

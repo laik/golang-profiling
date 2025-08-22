@@ -661,7 +661,8 @@ impl SymbolResolver {
         // Remove common Go runtime prefixes and make names more readable
         let cleaned = name
             .replace("runtime.", "")
-            .replace("main.", "main::")
+            // FIXED: Don't replace "main." with "main::" - this was causing all functions to show as "main::"
+            // .replace("main.", "main::")
             .replace(".func", "::func")
             .replace("·", "::")
             .replace("(*", "(")

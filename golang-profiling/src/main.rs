@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use aya::{
-    maps::{MapData, HashMap as AyaHashMap},
+    maps::{Array, MapData, HashMap as AyaHashMap},
     programs::{PerfEvent, TracePoint, perf_event},
     util::online_cpus,
     Ebpf,
@@ -16,7 +16,7 @@ use std::{
     convert::TryInto,
     path::PathBuf,
     process,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
     time::Duration,
 };
 use tokio::{signal, time};
@@ -175,10 +175,20 @@ async fn main() -> anyhow::Result<()> {
     info!("Detected Go runtime version: {:?}", 
           String::from_utf8_lossy(&runtime_info.version));
     
-    // Store runtime info in eBPF map
-    let mut go_runtime_map: AyaHashMap<_, u32, GoRuntimeInfo> = 
-        AyaHashMap::try_from(ebpf.map_mut("GO_RUNTIME_INFO").unwrap())?;
-    go_runtime_map.insert(target_pid, runtime_info, 0)?;
+    // Set target PID in eBPF map for filtering
+    let mut target_pid_map: Array<_, u32> = 
+        Array::try_from(ebpf.map_mut("TARGET_PID").unwrap())?;
+    target_pid_map.set(0, target_pid, 0)?;
+    info!("Target PID {} configured for eBPF filtering", target_pid);
+    
+    // Verify the PID was set correctly
+    if let Ok(stored_pid) = target_pid_map.get(&0, 0) {
+        info!("Verified: TARGET_PID map contains: {}", stored_pid);
+    } else {
+        error!("Failed to verify TARGET_PID map setting");
+    }
+    
+    // Runtime info is now only used in user space for symbol resolution
     
     // Initialize symbol resolver
     let symbol_resolver = Arc::new(Mutex::new(
@@ -362,8 +372,9 @@ async fn read_aggregated_counts(
     state: Arc<ProfilerState>
 ) {
     loop {
-        // Read all entries from the COUNTS map
+        // Read all entries from the COUNTS map (now filtered by target PID in eBPF)
         let mut current_counts = HashMap::new();
+        let mut total_samples = 0u64;
         
         // Iterate through all entries in the eBPF map
         for item in counts_map.iter() {
@@ -378,6 +389,7 @@ async fn read_aggregated_counts(
                 };
                 
                 current_counts.insert(profile_key, value);
+                total_samples += value;
             }
         }
         
@@ -385,6 +397,20 @@ async fn read_aggregated_counts(
         if !current_counts.is_empty() {
             let mut aggregated = state.aggregated_counts.lock().unwrap();
             *aggregated = current_counts;
+            
+            // Log sampling progress every 10 seconds (100 iterations * 100ms)
+            static ITERATION_COUNT: AtomicU64 = AtomicU64::new(0);
+            let count = ITERATION_COUNT.fetch_add(1, Ordering::Relaxed);
+            if count % 100 == 0 {
+                info!("Collected {} samples from target PID (eBPF filtered)", total_samples);
+            }
+        } else {
+            // Log when no data is collected
+            static NO_DATA_COUNT: AtomicU64 = AtomicU64::new(0);
+            let count = NO_DATA_COUNT.fetch_add(1, Ordering::Relaxed);
+            if count % 50 == 0 {
+                warn!("No stack data collected after {} iterations. eBPF program may not be triggering.", count);
+            }
         }
         
         tokio::time::sleep(Duration::from_millis(100)).await;
