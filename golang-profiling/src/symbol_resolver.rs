@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
 use golang_profiling_common::{GoRuntimeInfo, FuncInfo, StackFrame};
+#[cfg(feature = "user")]
+use golang_profiling_common::EnhancedFuncInfo;
 use log::{debug, info, warn};
 use memmap2::Mmap;
 use object::{Object, ObjectSection, ObjectSymbol};
@@ -10,6 +12,8 @@ use std::{
 };
 use byteorder::{LittleEndian, ReadBytesExt};
 use procfs::process::Process;
+use crate::dwarf_parser::{DwarfParser, SourceLocation};
+use crate::elfgopclntab::{Gopclntab, search_go_pclntab};
 
 /// Symbol resolver for Go programs
 pub struct SymbolResolver {
@@ -22,6 +26,8 @@ pub struct SymbolResolver {
     process_maps: Vec<procfs::process::MemoryMap>,
     base_address: u64,
     kernel_symbols: HashMap<u64, String>,
+    dwarf_parser: Option<DwarfParser>,
+    gopclntab: Option<Gopclntab>,
 }
 
 impl SymbolResolver {
@@ -36,6 +42,8 @@ impl SymbolResolver {
             process_maps: Vec::new(),
             base_address: 0,
             kernel_symbols: HashMap::new(),
+            dwarf_parser: None,
+            gopclntab: None,
         };
         
         resolver.load_kernel_symbols().unwrap_or_else(|e| {
@@ -58,17 +66,29 @@ impl SymbolResolver {
         // Load process memory maps
         self.load_process_maps()?;
         
-        // Try fallback to ELF symbols
-        self.load_symbols_fallback(&obj)?;
+        // Try to initialize DWARF parser
+        let mut dwarf_parser = DwarfParser::new();
+        if let Err(e) = dwarf_parser.parse_from_memory(&*mmap) {
+            warn!("Failed to parse DWARF information: {}", e);
+        } else {
+            info!("Successfully loaded DWARF debugging information");
+            self.dwarf_parser = Some(dwarf_parser);
+        }
         
-        // Original pclntab code (commented out):
-        // if let Some(section) = obj.section_by_name(".gopclntab") {
-        //     let data = section.data()?;
-        //     self.parse_pclntab(data)?;
-        // } else {
-        //     warn!("No .gopclntab section found, trying alternative methods");
-        //     self.load_symbols_fallback(&obj)?;
-        // }
+        // If DWARF parsing failed, try pclntab as primary fallback
+        if self.dwarf_parser.is_none() {
+            if let Some(section) = obj.section_by_name(".gopclntab") {
+                info!("DWARF not available, using .gopclntab section for symbol resolution");
+                let data = section.data()?;
+                self.parse_pclntab(data)?;
+            } else {
+                warn!("No .gopclntab section found, trying ELF symbol fallback");
+                self.load_symbols_fallback(&obj)?;
+            }
+        } else {
+            // DWARF is available, but still try to load pclntab as additional source
+            self.try_load_pclntab(&obj)?;
+        }
         
         self.binary_mmap = Some(mmap);
         info!("Loaded {} function symbols, {} cached symbols", self.func_table.len(), self.symbol_cache.len());
@@ -110,9 +130,6 @@ impl SymbolResolver {
         // Sort by address
         func_entries.sort_by_key(|&(addr, _)| addr);
         
-        // Try to load Go pclntab for better symbol information
-        self.try_load_pclntab(obj)?;
-        
         // Convert to FuncInfo and populate cache
         for (addr, name) in func_entries {
             let func_info = FuncInfo {
@@ -145,11 +162,43 @@ impl SymbolResolver {
     
     /// Parse Go pclntab section for enhanced symbol information
     fn parse_pclntab(&mut self, data: &[u8]) -> Result<()> {
-        if data.len() < 8 {
+        if data.len() < 16 {
             return Err(anyhow!("pclntab too small"));
         }
         
-        // Go pclntab header: magic (4 bytes) + pad (1 byte) + minlc (1 byte) + ptrsize (1 byte) + nfunctab (4 bytes)
+        // Try to use the enhanced elfgopclntab parser first
+        match self.parse_pclntab_enhanced(data) {
+            Ok(()) => {
+                info!("Successfully parsed pclntab using enhanced parser");
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Enhanced pclntab parser failed: {}, falling back to legacy parser", e);
+            }
+        }
+        
+        // Fallback to legacy parser
+        self.parse_pclntab_legacy(data)
+    }
+    
+    fn parse_pclntab_enhanced(&mut self, data: &[u8]) -> Result<()> {
+        // Use the enhanced Gopclntab parser
+        let gopclntab = Gopclntab::new(data.to_vec())
+            .map_err(|e| anyhow!("Failed to parse gopclntab: {}", e))?;
+        
+        info!("Enhanced parser found {} functions (Go version {}, text_start=0x{:x})", 
+              gopclntab.num_funcs, gopclntab.version, gopclntab.text_start);
+        
+        // Store the gopclntab instance for direct symbolization
+        // No need to build a separate function table since gopclntab.symbolize() handles everything
+        self.gopclntab = Some(gopclntab);
+        
+        info!("Enhanced parser successfully initialized with gopclntab");
+        Ok(())
+    }
+    
+    fn parse_pclntab_legacy(&mut self, data: &[u8]) -> Result<()> {
+        // Go pclntab header: magic (4 bytes) + pad (1 byte) + minlc (1 byte) + ptrsize (1 byte) + version (1 byte)
         let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         // Go has different magic numbers for different versions
         // 0xfffffffb (Go 1.2+), 0xfffffff1 (Go 1.16+), 0xfffffff0 (Go 1.18+)
@@ -158,23 +207,49 @@ impl SymbolResolver {
             return Ok(()); // Don't fail, just skip pclntab parsing
         }
         
-        let ptrsize = data[6] as usize;
+        let mut ptrsize = data[6] as usize;
+        
+        // For Go 1.16+ format, the header layout is different
+        if magic == 0xfffffff1 {
+            // Go 1.16+ format: magic(4) + pad(1) + minlc(1) + ptrsize(1) + version(1) + ...
+            // But the actual ptrsize might be at a different offset
+            if data.len() >= 16 {
+                // Try to detect pointer size from the data pattern
+                if u32::from_le_bytes([data[8], data[9], data[10], data[11]]) > 0 && 
+                   u32::from_le_bytes([data[8], data[9], data[10], data[11]]) < 100000 {
+                    // Looks like function count, so ptrsize is likely 8
+                    ptrsize = 8;
+                }
+            }
+        }
+        
         if ptrsize != 4 && ptrsize != 8 {
             debug!("Unsupported pointer size: {}, skipping pclntab parsing", ptrsize);
             return Ok(()); // Don't fail, just skip pclntab parsing
         }
         
-        // Read function table count
+        // Read function table count - for Go 1.16+, it's at offset 8
         let nfunctab = if data.len() >= 12 {
             u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize
         } else {
             return Err(anyhow!("pclntab header incomplete"));
         };
         
-        info!("Found {} functions in pclntab", nfunctab);
+        info!("Found {} functions in pclntab (ptrsize={}, magic=0x{:x})", nfunctab, ptrsize, magic);
         
-        // Parse function entries (simplified)
-        let mut offset = 8 + ptrsize; // Skip header
+        // Function table always starts at 8 + ptrsize regardless of Go version
+        // This is consistent across all Go versions including 1.16+
+        let functab_start = 8 + ptrsize;
+        
+        debug!("Function table starts at offset 0x{:x}", functab_start);
+        
+        // Parse function entries
+        let mut offset = functab_start;
+        
+        // First pass: collect function entries
+        let mut func_entries = Vec::new();
+        let mut consecutive_invalid = 0;
+        
         for i in 0..std::cmp::min(nfunctab, 1000) { // Limit to avoid excessive parsing
             if offset + ptrsize * 2 > data.len() {
                 break;
@@ -202,12 +277,123 @@ impl SymbolResolver {
             
             offset += ptrsize;
             
-            // Create enhanced FuncInfo with potential for file/line info
+            // Check if this looks like string data (ASCII characters)
+            let entry_bytes = entry.to_le_bytes();
+            let funcoff_bytes = funcoff.to_le_bytes();
+            let is_likely_string = entry_bytes.iter().chain(funcoff_bytes.iter())
+                .take(8) // Check first 8 bytes
+                .filter(|&&b| b >= 32 && b <= 126) // Printable ASCII
+                .count() >= 6; // At least 6 out of 8 bytes are printable
+            
+            if is_likely_string {
+                debug!("Detected string data at function {}, stopping function table parsing", i);
+                break;
+            }
+            
+            // Validate that this looks like a reasonable function entry
+            // For Go binaries, function addresses are typically in the text segment
+            if entry > 0 && entry < 0x10000000 {
+                // Convert relative address to absolute address by adding base address
+                let absolute_entry = entry + self.base_address;
+                func_entries.push((absolute_entry, funcoff));
+                consecutive_invalid = 0;
+                if i < 10 {
+                    debug!("Function {}: entry=0x{:x} (rel=0x{:x}), funcoff=0x{:x}", i, absolute_entry, entry, funcoff);
+                }
+            } else {
+                consecutive_invalid += 1;
+                if i < 10 {
+                    debug!("Skipping invalid function {}: entry=0x{:x}, funcoff=0x{:x}", i, entry, funcoff);
+                }
+                // If we see too many consecutive invalid entries, stop parsing
+                if consecutive_invalid >= 3 {
+                    debug!("Too many consecutive invalid entries, stopping function table parsing");
+                    break;
+                }
+            }
+        }
+        
+        // Find string table - for Go 1.16+, it's typically much later in the section
+        let functab_end = functab_start + func_entries.len() * ptrsize * 2;
+        
+        // Look for string table starting after function table
+        let mut string_table_start = functab_end;
+        
+        // For Go 1.16+, the string table is often much further into the section
+        // Look for the characteristic pattern of Go function names
+        if magic == 0xfffffff1 {
+            // Start searching from a reasonable offset
+            string_table_start = std::cmp::max(functab_end, data.len() / 10);
+        }
+        
+        // Find the actual start of string data
+        while string_table_start < data.len() - 10 {
+            // Look for what looks like a Go function name pattern
+            if data[string_table_start] != 0 && data[string_table_start].is_ascii_alphabetic() {
+                let mut end = string_table_start;
+                while end < data.len() && data[end] != 0 {
+                    end += 1;
+                }
+                if end > string_table_start {
+                    let potential_name = String::from_utf8_lossy(&data[string_table_start..end]);
+                    // Look for typical Go patterns
+                    if potential_name.len() > 3 && 
+                       (potential_name.contains("main") || potential_name.contains("runtime") || 
+                        potential_name.contains("internal") || potential_name.contains(".") ||
+                        potential_name.contains("/")) {
+                        debug!("Found string table at offset 0x{:x}: {}", string_table_start, potential_name);
+                        break;
+                    }
+                }
+            }
+            string_table_start += 1;
+        }
+        
+        // Extract string table
+        if string_table_start < data.len() {
+            self.string_table = data[string_table_start..].to_vec();
+            info!("Loaded string table of {} bytes starting at offset {}", self.string_table.len(), string_table_start);
+        }
+        
+        // Second pass: create FuncInfo entries with proper name offsets
+        for (entry, funcoff) in func_entries {
+            // For Go 1.16+, funcoff is an absolute offset that needs to be converted
+            // to a relative offset within the pclntab section
+            let name_off = if funcoff > 0 {
+                // Try to find funcoff within the pclntab data
+                // funcoff might be relative to the section start or absolute
+                let relative_funcoff = if funcoff < data.len() as u64 {
+                    // funcoff is already relative to pclntab start
+                    funcoff
+                } else {
+                    // funcoff might be absolute, try to make it relative
+                    // This is a heuristic - we look for reasonable offsets
+                    if funcoff > 0x400000 && funcoff < 0x500000 {
+                        // Looks like an absolute offset, try to convert
+                        funcoff.saturating_sub(0x400000)
+                    } else {
+                        funcoff
+                    }
+                };
+                
+                if relative_funcoff + 4 < data.len() as u64 {
+                    // Read name offset from function metadata
+                    u32::from_le_bytes([
+                        data[relative_funcoff as usize], data[relative_funcoff as usize + 1],
+                        data[relative_funcoff as usize + 2], data[relative_funcoff as usize + 3]
+                    ])
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            
             let func_info = FuncInfo {
                 entry,
-                name_off: (funcoff & 0xFFFFFFFF) as u32,
-                file_off: 0, // Would need more complex parsing
-                line: 0,     // Would need more complex parsing
+                name_off,
+                file_off: 0,
+                line: 0,
             };
             
             // Only add if not already present
@@ -218,6 +404,8 @@ impl SymbolResolver {
         
         // Sort function table by entry address
         self.func_table.sort_by_key(|f| f.entry);
+        
+        info!("Successfully parsed {} functions from pclntab", self.func_table.len());
         
         Ok(())
     }
@@ -269,6 +457,56 @@ impl SymbolResolver {
             }
         }
         
+        // Try DWARF information first (highest priority)
+        if let Some(ref dwarf_parser) = self.dwarf_parser {
+            if let Some(location) = dwarf_parser.get_nearest_location(pc) {
+                let mut symbol = String::new();
+                
+                // Add function name if available
+                if let Some(ref func_name) = location.function_name {
+                    symbol.push_str(func_name);
+                } else {
+                    // For anonymous functions, try to infer from file and line
+                    if location.file_path.ends_with("main.go") {
+                        symbol.push_str("main.func");
+                    } else {
+                        symbol.push_str("<anonymous_function>");
+                    }
+                }
+                
+                // Add file and line information
+                if !location.file_path.is_empty() && location.line > 0 {
+                    symbol.push_str(&format!(" {}:{}", location.file_path, location.line));
+                }
+                
+                debug!("Resolved via DWARF: {}", symbol);
+                return symbol;
+            }
+        }
+        
+        // Try enhanced gopclntab symbolization (second priority)
+        if let Some(ref gopclntab) = self.gopclntab {
+            // For Go 1.18+, symbolize method expects absolute addresses
+            // For older versions, also use absolute addresses
+            let lookup_pc = pc;
+            
+            debug!("Gopclntab lookup: pc=0x{:x}, lookup_pc=0x{:x}, text_start=0x{:x}, base=0x{:x}", 
+                   pc, lookup_pc, gopclntab.text_start, self.base_address);
+            
+            let (source_file, line, func_name) = gopclntab.symbolize(lookup_pc as usize);
+            if !func_name.is_empty() {
+                let mut symbol = func_name;
+                
+                // Add file and line information if available
+                if !source_file.is_empty() && line > 0 {
+                    symbol.push_str(&format!(" {}:{}", source_file, line));
+                }
+                
+                debug!("Resolved via gopclntab symbolize: {}", symbol);
+                return self.clean_go_function_name(&symbol);
+            }
+        }
+        
         // Check cache first (this contains symbolic library results)
         if let Some(name) = self.symbol_cache.get(&pc) {
             debug!("Found in cache: {}", name);
@@ -312,6 +550,56 @@ impl SymbolResolver {
         let addr_str = format!("[unknown:0x{:x}]", pc);
         debug!("Falling back to address: {}", addr_str);
         addr_str
+    }
+    
+    /// Resolve PC to enhanced function information
+    #[cfg(feature = "user")]
+    pub fn resolve_enhanced_pc(&self, pc: u64) -> EnhancedFuncInfo {
+        // First try DWARF if available
+        if let Some(ref dwarf_parser) = self.dwarf_parser {
+            if let Some(location) = dwarf_parser.get_nearest_location(pc) {
+                return EnhancedFuncInfo::from_dwarf(
+                    pc,
+                    location.function_name,
+                    Some(location.file_path),
+                    Some(location.line),
+                    location.column,
+                    None, // end_address not available from current DWARF parser
+                );
+            }
+        }
+
+        // Fallback to pclntab information
+        if let Some(func_info) = self.find_function_by_pc(pc) {
+            let mut enhanced = EnhancedFuncInfo::from_basic(*func_info);
+            
+            // Try to get function name from pclntab
+            if let Some(name) = self.get_function_name(func_info) {
+                enhanced.function_name = Some(self.clean_go_function_name(&name));
+            }
+            
+            // Try to get file path from pclntab
+            if let Some(file_path) = self.get_file_path(func_info) {
+                enhanced.file_path = Some(file_path);
+            }
+            
+            // Try to get precise line number
+            if let Some(line) = self.get_line_number(func_info, pc) {
+                enhanced.precise_line = Some(line);
+            }
+            
+            return enhanced;
+        }
+
+        // Return unknown function info
+        EnhancedFuncInfo::from_dwarf(
+            pc,
+            Some(format!("[unknown:0x{:x}]", pc)),
+            None,
+            None,
+            None,
+            None,
+        )
     }
     
     /// Find function info by program counter
@@ -376,7 +664,6 @@ impl SymbolResolver {
             .replace("main.", "main::")
             .replace(".func", "::func")
             .replace("·", "::")
-            .replace("/", "::")
             .replace("(*", "(")
             .replace(")", ")");
             
@@ -500,11 +787,8 @@ impl SymbolResolver {
         
         if let Some(symbol) = best_symbol {
             if addr - best_addr < 0x10000 { // Within 64KB range
-                if addr == best_addr {
-                    Some(symbol.clone())
-                } else {
-                    Some(format!("{} +0x{:x}", symbol, addr - best_addr))
-                }
+                // Always return just the symbol name without offset for cleaner display
+                Some(symbol.clone())
             } else {
                 None
             }
@@ -622,6 +906,8 @@ mod tests {
             process_maps: Vec::new(),
             base_address: 0,
             kernel_symbols: HashMap::new(),
+            dwarf_parser: None,
+            gopclntab: None,
         };
         
         let func_info1 = FuncInfo {
@@ -673,6 +959,8 @@ mod tests {
             process_maps: Vec::new(),
             base_address: 0,
             kernel_symbols: HashMap::new(),
+            dwarf_parser: None,
+            gopclntab: None,
         };
         
         // Test exact match
@@ -710,6 +998,8 @@ mod tests {
             process_maps: Vec::new(),
             base_address: 0,
             kernel_symbols: HashMap::new(),
+            dwarf_parser: None,
+            gopclntab: None,
         };
         
         // Test successful resolution

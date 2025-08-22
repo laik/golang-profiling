@@ -24,10 +24,13 @@ use tokio::{signal, time};
 mod golang_parser;
 mod symbol_resolver;
 mod flamegraph_export;
+mod dwarf_parser;
+mod elfgopclntab;
 
 use golang_parser::GoRuntimeParser;
 use symbol_resolver::SymbolResolver;
 use flamegraph_export::FlameGraphExporter;
+use dwarf_parser::DwarfParser;
 
 #[derive(Parser, Debug)]
 #[command(name = "golang-profile")]

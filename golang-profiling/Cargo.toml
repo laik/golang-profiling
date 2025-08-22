@@ -29,6 +29,7 @@ object = "0.36"
 memmap2 = "0.9"
 byteorder = "1.5"
 procfs = "0.16"
+gimli = "0.29"
 
 [dev-dependencies]
 tempfile = "3.8"

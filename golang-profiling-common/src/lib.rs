@@ -108,6 +108,97 @@ pub struct FuncInfo {
     pub line: u32,
 }
 
+/// Enhanced function information with DWARF debugging data
+#[cfg(feature = "user")]
+#[derive(Clone, Debug)]
+pub struct EnhancedFuncInfo {
+    /// Basic function information
+    pub basic: FuncInfo,
+    /// Full function name (resolved from DWARF or pclntab)
+    pub function_name: Option<String>,
+    /// Full file path
+    pub file_path: Option<String>,
+    /// Precise line number for the given PC
+    pub precise_line: Option<u32>,
+    /// Column number
+    pub column: Option<u32>,
+    /// Function end address (if available from DWARF)
+    pub end_address: Option<u64>,
+    /// Whether this information comes from DWARF
+    pub from_dwarf: bool,
+}
+
+#[cfg(feature = "user")]
+impl EnhancedFuncInfo {
+    /// Create from basic FuncInfo
+    pub fn from_basic(basic: FuncInfo) -> Self {
+        Self {
+            basic,
+            function_name: None,
+            file_path: None,
+            precise_line: Some(basic.line),
+            column: None,
+            end_address: None,
+            from_dwarf: false,
+        }
+    }
+
+    /// Create from DWARF information
+    pub fn from_dwarf(
+        entry: u64,
+        function_name: Option<String>,
+        file_path: Option<String>,
+        line: Option<u32>,
+        column: Option<u32>,
+        end_address: Option<u64>,
+    ) -> Self {
+        Self {
+            basic: FuncInfo {
+                entry,
+                name_off: 0,
+                file_off: 0,
+                line: line.unwrap_or(0),
+            },
+            function_name,
+            file_path,
+            precise_line: line,
+            column,
+            end_address,
+            from_dwarf: true,
+        }
+    }
+
+    /// Get the best available function name
+    pub fn get_function_name(&self) -> Option<&str> {
+        self.function_name.as_deref()
+    }
+
+    /// Get the best available file path
+    pub fn get_file_path(&self) -> Option<&str> {
+        self.file_path.as_deref()
+    }
+
+    /// Get the best available line number
+    pub fn get_line_number(&self) -> Option<u32> {
+        self.precise_line.or(Some(self.basic.line))
+    }
+
+    /// Format as symbol string for flame graph
+    pub fn format_symbol(&self) -> String {
+        let func_name = self.get_function_name().unwrap_or("[unknown]");
+        
+        if let (Some(file), Some(line)) = (self.get_file_path(), self.get_line_number()) {
+            if let Some(column) = self.column {
+                format!("{}:{}:{} {}", file, line, column, func_name)
+            } else {
+                format!("{}:{} {}", file, line, func_name)
+            }
+        } else {
+            func_name.to_string()
+        }
+    }
+}
+
 #[cfg(feature = "user")]
 pub mod user {
     extern crate std;

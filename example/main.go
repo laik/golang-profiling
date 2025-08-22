@@ -99,9 +99,9 @@ func main() {
 
 	fmt.Println("All jobs completed. Program will run for 30 seconds for profiling...")
 
-	// 持续运行一段时间以便进行profiling
-	start := time.Now()
-	for time.Since(start) < 300000000*time.Second {
+	// 持续运行以便进行profiling
+	fmt.Println("Running continuous workload for profiling...")
+	for {
 		// 混合不同类型的负载
 		go cpuIntensiveTask(50000)
 		go memoryIntensiveTask()
@@ -109,9 +109,11 @@ func main() {
 			recursiveFunction(8)
 		}()
 
-		time.Sleep(100 * time.Millisecond)
-	}
+		// 主线程也执行一些任务
+		cpuIntensiveTask(30000)
+		memoryIntensiveTask()
 
-	fmt.Println("Program finished.")
-	time.Sleep(1000000 * time.Second)
+		// 短暂休息，避免CPU占用过高
+		time.Sleep(10 * time.Millisecond)
+	}
 }
