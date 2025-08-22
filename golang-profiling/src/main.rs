@@ -77,7 +77,7 @@ struct Args {
     subtitle: Option<String>,
     
     /// Color palette: hot, mem, io, wakeup, chain, java, js, perl, red, green, blue, aqua, yellow, purple, orange
-    #[arg(long, default_value = "hot")]
+    #[arg(long, default_value = "kernel_user")]
     colors: String,
     
     /// Background colors: yellow, blue, green, grey, or custom hex color

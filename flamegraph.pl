@@ -143,7 +143,7 @@ USAGE: $0 [options] infile > outfile.svg\n
 	--nametype TEXT  # name type label (default "Function:")
 	--colors PALETTE # set color palette. choices are: hot (default), mem,
 	                 # io, wakeup, chain, java, js, perl, red, green, blue,
-	                 # aqua, yellow, purple, orange
+	                 # aqua, yellow, purple, orange, kernel_user
 	--bgcolors COLOR # set background colors. gradient choices are yellow
 	                 # (default), blue, green, grey; flat colors use "#rrggbb"
 	--hash           # colors are keyed by function name hash
@@ -410,6 +410,23 @@ sub color {
 		$v1 = random_namehash($name);
 		$v2 = random_namehash($name);
 		$v3 = random_namehash($name);
+	}
+
+	# Custom kernel/user color theme
+	if (defined $type and $type eq "kernel_user") {
+		if ($name =~ m:_\[k\]$:) {	# kernel annotation
+			# Green for kernel functions (#99DF8A)
+			my $r = 153 + int(20 * $v1);
+			my $g = 223 + int(20 * $v1);
+			my $b = 138 + int(20 * $v1);
+			return "rgb($r,$g,$b)";
+		} else {
+			# Blue for user code (#30D1F3)
+			my $r = 48 + int(20 * $v1);
+			my $g = 209 + int(20 * $v1);
+			my $b = 243 + int(12 * $v1);
+			return "rgb($r,$g,$b)";
+		}
 	}
 
 	# theme palettes

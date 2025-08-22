@@ -453,7 +453,7 @@ impl SymbolResolver {
         if pc >= 0xffffffff80000000 {
             if let Some(kernel_symbol) = self.resolve_kernel_symbol(pc) {
                 debug!("Resolved kernel symbol: {}", kernel_symbol);
-                return kernel_symbol;
+                return format!("{}_[k]", kernel_symbol);
             }
         }
         
