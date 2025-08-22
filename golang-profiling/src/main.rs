@@ -38,7 +38,7 @@ use flamegraph_export::FlameGraphExporter;
 use dwarf_parser::DwarfParser;
 
 #[derive(Parser, Debug)]
-#[command(name = "golang-profile")]
+#[command(name = "golang-profiling")]
 #[command(about = "High-performance Golang CPU profiler with flame graph generation")]
 struct Args {
     /// Target process ID to profile
@@ -74,7 +74,7 @@ struct Args {
     export_folded: Option<PathBuf>,
     
     /// Flame graph title
-    #[arg(long, default_value = "Golang CPU Profile")]
+    #[arg(long, default_value = "Golang CPU Profiling")]
     title: String,
     
     /// Flame graph subtitle

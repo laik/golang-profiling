@@ -4,6 +4,12 @@
 
 高性能的 Golang CPU 性能分析工具，基于 eBPF 技术实现，支持生成火焰图进行性能可视化分析。
 
+## 🔥 示例火焰图
+
+![示例火焰图](example_flamegraph.svg)
+
+*交互式火焰图展示 CPU 性能分析结果，内核函数（绿色）和用户态函数（蓝色）*
+
 ## 项目简介
 
 `golang-profile` 是一个专为 Golang 应用程序设计的 CPU 性能分析工具。它使用 eBPF (Extended Berkeley Packet Filter) 技术在内核层面收集性能数据，具有极低的性能开销，能够在生产环境中安全使用。
