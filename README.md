@@ -2,6 +2,11 @@
 
 [中文文档](README_zh.md) | English
 
+[![CI](https://github.com/YOUR_USERNAME/golang-profile/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/ci.yml)
+[![Security Audit](https://github.com/YOUR_USERNAME/golang-profile/workflows/Security%20Audit/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/security.yml)
+[![Documentation](https://github.com/YOUR_USERNAME/golang-profile/workflows/Documentation/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/docs.yml)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+
 🔥 A high-performance Golang application profiling tool based on eBPF technology, capable of generating interactive flame graphs for performance analysis.
 
 ## 🔥 Example Flame Graph
@@ -33,7 +38,25 @@
 
 ## 📦 Installation
 
-### Install Rust Toolchain
+### Option 1: Download Pre-built Binaries
+
+Download the latest release from [GitHub Releases](https://github.com/YOUR_USERNAME/golang-profile/releases):
+
+```bash
+# Download for x86_64 Linux
+wget https://github.com/YOUR_USERNAME/golang-profile/releases/latest/download/golang-profiling-linux-x86_64.tar.gz
+tar -xzf golang-profiling-linux-x86_64.tar.gz
+sudo mv golang-profiling /usr/local/bin/
+
+# Download for ARM64 Linux
+wget https://github.com/YOUR_USERNAME/golang-profile/releases/latest/download/golang-profiling-linux-aarch64.tar.gz
+tar -xzf golang-profiling-linux-aarch64.tar.gz
+sudo mv golang-profiling /usr/local/bin/
+```
+
+### Option 2: Build from Source
+
+#### Install Rust Toolchain
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

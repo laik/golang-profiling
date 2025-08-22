@@ -2,6 +2,11 @@
 
 [English](README.md) | 中文文档
 
+[![CI](https://github.com/YOUR_USERNAME/golang-profile/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/ci.yml)
+[![Security Audit](https://github.com/YOUR_USERNAME/golang-profile/workflows/Security%20Audit/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/security.yml)
+[![Documentation](https://github.com/YOUR_USERNAME/golang-profile/workflows/Documentation/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/docs.yml)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+
 高性能的 Golang CPU 性能分析工具，基于 eBPF 技术实现，支持生成火焰图进行性能可视化分析。
 
 ## 🔥 示例火焰图
@@ -29,9 +34,27 @@
 - **权限**: 需要 root 权限或 CAP_BPF 能力
 - **依赖**: Perl (用于火焰图生成)
 
-## 安装依赖
+## 安装方式
 
-### 1. 安装 Rust 工具链
+### 方式一：下载预编译二进制文件
+
+从 [GitHub Releases](https://github.com/YOUR_USERNAME/golang-profile/releases) 下载最新版本：
+
+```bash
+# 下载 x86_64 Linux 版本
+wget https://github.com/YOUR_USERNAME/golang-profile/releases/latest/download/golang-profiling-linux-x86_64.tar.gz
+tar -xzf golang-profiling-linux-x86_64.tar.gz
+sudo mv golang-profiling /usr/local/bin/
+
+# 下载 ARM64 Linux 版本
+wget https://github.com/YOUR_USERNAME/golang-profile/releases/latest/download/golang-profiling-linux-aarch64.tar.gz
+tar -xzf golang-profiling-linux-aarch64.tar.gz
+sudo mv golang-profiling /usr/local/bin/
+```
+
+### 方式二：从源码编译
+
+#### 1. 安装 Rust 工具链
 
 ```bash
 # 安装 Rust

@@ -44,3 +44,15 @@ Thumbs.db
 # FlameGraph repository (if using as submodule)
 FlameGraph/
 etcd-v3.6.4-linux-amd64/
+
+# GitHub Actions artifacts
+*.tar.gz
+*.zip
+
+# Documentation build
+doc/
+
+# Test files
+test_*.svg
+test_*.folded
+test_embedded*
