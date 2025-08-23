@@ -9,6 +9,7 @@ use aya_ebpf::{
 };
 use aya_log_ebpf::info;
 use golang_profiling_common::EbpfProfileKey;
+use aya_ebpf::helpers::bpf_probe_read_user;
 
 // eBPF program metadata
 #[cfg(not(test))]
@@ -51,6 +52,7 @@ unsafe fn try_golang_profile(ctx: PerfEventContext) -> Result<u32, u32> {
     if tgid == 0 {
         return Ok(0);
     }
+    
 
     // Check if we have a target PID configured and filter accordingly
     let target_pid = match TARGET_PID.get(0) {

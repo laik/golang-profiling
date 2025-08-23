@@ -2,10 +2,6 @@
 
 [English](README.md) | 中文文档
 
-[![CI](https://github.com/YOUR_USERNAME/golang-profile/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/ci.yml)
-[![Security Audit](https://github.com/YOUR_USERNAME/golang-profile/workflows/Security%20Audit/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/security.yml)
-[![Documentation](https://github.com/YOUR_USERNAME/golang-profile/workflows/Documentation/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/docs.yml)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 高性能的 Golang CPU 性能分析工具，基于 eBPF 技术实现，支持生成火焰图进行性能可视化分析。
 
@@ -13,7 +9,6 @@
 
 ![示例火焰图](example_flamegraph.svg)
 
-*交互式火焰图展示 CPU 性能分析结果，内核函数（绿色）和用户态函数（蓝色）*
 
 ## 项目简介
 
