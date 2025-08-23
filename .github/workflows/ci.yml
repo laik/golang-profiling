@@ -40,6 +40,9 @@ jobs:
           linux-headers-$(uname -r) \
           perl
     
+    - name: Install bpf-linker
+      run: cargo +nightly install bpf-linker
+    
     - name: Cache cargo registry
       uses: actions/cache@v3
       with:
@@ -68,7 +71,10 @@ jobs:
         # cargo +stable clippy -p golang-profiling --all-features -- -D warnings
     
     - name: Build
-      run: cargo +stable build --verbose
+      run: |
+        cargo +stable build --verbose --package golang-profiling
+        cargo +stable build --verbose --package golang-profiling-common
+        cargo +nightly build --verbose --package golang-profiling-ebpf
     
     - name: Run tests
       run: |
@@ -107,8 +113,14 @@ jobs:
           linux-headers-$(uname -r) \
           perl
     
+    - name: Install bpf-linker
+      run: cargo +nightly install bpf-linker
+    
     - name: Build release
-      run: cargo +stable build --release
+      run: |
+        cargo +stable build --release --package golang-profiling
+        cargo +stable build --release --package golang-profiling-common
+        cargo +nightly build --release --package golang-profiling-ebpf
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
