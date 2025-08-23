@@ -2,10 +2,6 @@
 
 [中文文档](README_zh.md) | English
 
-[![CI](https://github.com/YOUR_USERNAME/golang-profile/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/ci.yml)
-[![Security Audit](https://github.com/YOUR_USERNAME/golang-profile/workflows/Security%20Audit/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/security.yml)
-[![Documentation](https://github.com/YOUR_USERNAME/golang-profile/workflows/Documentation/badge.svg)](https://github.com/YOUR_USERNAME/golang-profile/actions/workflows/docs.yml)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 🔥 A high-performance Golang application profiling tool based on eBPF technology, capable of generating interactive flame graphs for performance analysis.
 
@@ -13,7 +9,6 @@
 
 ![Example Flame Graph](example_flamegraph.svg)
 
-*Interactive flame graph showing CPU profiling results with kernel (green) and user-space (blue) functions*
 
 ## ✨ Features
 
