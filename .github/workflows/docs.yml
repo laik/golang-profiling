@@ -36,7 +36,7 @@ jobs:
           linux-headers-$(uname -r)
     
     - name: Generate documentation
-      run: cargo doc --no-deps --all-features
+      run: cargo +stable doc --no-deps --all-features
     
     - name: Deploy to GitHub Pages
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
