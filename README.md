@@ -243,8 +243,6 @@ Contributions are welcome! Please feel free to submit Issues and Pull Requests.
 
 - [FlameGraph](https://github.com/brendangregg/FlameGraph) - Brendan Gregg's flame graph tools
 - [aya](https://github.com/aya-rs/aya) - Rust eBPF library
-- [perf](https://perf.wiki.kernel.org/) - Linux profiling tool
-- [bpftrace](https://github.com/iovisor/bpftrace) - High-level tracing language for eBPF
 
 ---
 
