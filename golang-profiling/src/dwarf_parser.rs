@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use gimli::{Dwarf, EndianSlice, LittleEndian, Reader};
 use object::{Object, ObjectSection};
 use std::collections::HashMap;
@@ -47,7 +47,7 @@ impl DwarfParser {
     fn parse_from_object(&mut self, object: &object::File) -> Result<()> {
         // Store section data to avoid lifetime issues
         let mut section_data: HashMap<String, Vec<u8>> = HashMap::new();
-        
+
         // Load all DWARF sections
         for section_id in [
             gimli::SectionId::DebugInfo,
@@ -63,13 +63,14 @@ impl DwarfParser {
                 }
             }
         }
-        
-        let load_section = |id: gimli::SectionId| -> Result<EndianSlice<LittleEndian>, gimli::Error> {
-            match section_data.get(id.name()) {
-                Some(data) => Ok(EndianSlice::new(data, LittleEndian)),
-                None => Ok(EndianSlice::new(&[], LittleEndian)),
-            }
-        };
+
+        let load_section =
+            |id: gimli::SectionId| -> Result<EndianSlice<LittleEndian>, gimli::Error> {
+                match section_data.get(id.name()) {
+                    Some(data) => Ok(EndianSlice::new(data, LittleEndian)),
+                    None => Ok(EndianSlice::new(&[], LittleEndian)),
+                }
+            };
 
         let dwarf = Dwarf::load(&load_section)?;
 
@@ -113,13 +114,13 @@ impl DwarfParser {
         line_program: gimli::IncompleteLineProgram<R>,
     ) -> Result<()> {
         let (program, sequences) = line_program.sequences()?;
-        
+
         for sequence in sequences {
             let mut rows = program.resume_from(&sequence);
             while let Some((header, row)) = rows.next_row()? {
                 if let Some(file) = row.file(header) {
                     let file_path = self.get_file_path(dwarf, unit, file)?;
-                    
+
                     let location = SourceLocation {
                         file_path,
                         line: row.line().map(|l| l.get() as u32).unwrap_or(0),
@@ -129,12 +130,12 @@ impl DwarfParser {
                         },
                         function_name: None, // 将在后续步骤中填充
                     };
-                    
+
                     self.address_to_location.insert(row.address(), location);
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -164,17 +165,15 @@ impl DwarfParser {
                         low_pc = Some(addr);
                     }
                 }
-                gimli::DW_AT_high_pc => {
-                    match attr.value() {
-                        gimli::AttributeValue::Addr(addr) => high_pc = Some(addr),
-                        gimli::AttributeValue::Udata(offset) => {
-                            if let Some(low) = low_pc {
-                                high_pc = Some(low + offset);
-                            }
+                gimli::DW_AT_high_pc => match attr.value() {
+                    gimli::AttributeValue::Addr(addr) => high_pc = Some(addr),
+                    gimli::AttributeValue::Udata(offset) => {
+                        if let Some(low) = low_pc {
+                            high_pc = Some(low + offset);
                         }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
                 gimli::DW_AT_ranges => {
                     if let gimli::AttributeValue::RangeListsRef(offset) = attr.value() {
                         ranges = Some(offset);
@@ -208,7 +207,7 @@ impl DwarfParser {
                         }
                     }
                 }
-                
+
                 self.function_ranges.insert(name, function_ranges);
             }
         }
@@ -224,7 +223,7 @@ impl DwarfParser {
         file: &gimli::FileEntry<R>,
     ) -> Result<String> {
         let mut path = String::new();
-        
+
         // 获取目录
         if let Some(dir) = file.directory(unit.line_program.as_ref().unwrap().header()) {
             if let Ok(dir_name) = dwarf.attr_string(unit, dir) {
@@ -234,12 +233,12 @@ impl DwarfParser {
                 }
             }
         }
-        
+
         // 获取文件名
         if let Ok(file_name) = dwarf.attr_string(unit, file.path_name()) {
             path.push_str(&file_name.to_string_lossy()?);
         }
-        
+
         Ok(path)
     }
 
@@ -258,14 +257,14 @@ impl DwarfParser {
         // 查找最近的较小地址
         let mut best_addr = 0;
         let mut best_location = None;
-        
+
         for (&addr, location) in &self.address_to_location {
             if addr <= address && addr > best_addr {
                 best_addr = addr;
                 best_location = Some(location);
             }
         }
-        
+
         best_location
     }
 

@@ -46,48 +46,48 @@ pub fn golang_profile(ctx: PerfEventContext) -> u32 {
 unsafe fn try_golang_profile(ctx: PerfEventContext) -> Result<u32, u32> {
     let pid_tgid = bpf_get_current_pid_tgid();
     let tgid = (pid_tgid >> 32) as u32;
-    
+
     // Skip idle process (PID 0)
     if tgid == 0 {
         return Ok(0);
     }
-    
+
     // Check if we have a target PID configured and filter accordingly
     if let Some(target_pid) = TARGET_PID.get(0) {
         // Debug output disabled for production use
         // info!(&ctx, "Current PID: {}, Target PID: {}", tgid, *target_pid);
-        
+
         // If target_pid is 0, it means no filtering (profile all processes)
         // Otherwise, only profile the specified PID
         if *target_pid != 0 && tgid != *target_pid {
             return Ok(0);
         }
-        
+
         // Debug: print when we match the target PID
         if *target_pid != 0 && tgid == *target_pid {
             // bpf_printk!("Matched target PID: %u", tgid);
         }
     }
     // If TARGET_PID.get(0) returns None, we allow all processes (no filtering)
-    
+
     // Get stack traces
-    let user_stack_id = STACK_TRACES.get_stackid(&ctx, BPF_F_USER_STACK)
+    let user_stack_id = STACK_TRACES
+        .get_stackid(&ctx, BPF_F_USER_STACK)
         .unwrap_or(-1) as i32;
-    
-    let kernel_stack_id = STACK_TRACES.get_stackid(&ctx, 0)
-        .unwrap_or(-1) as i32;
-    
+
+    let kernel_stack_id = STACK_TRACES.get_stackid(&ctx, 0).unwrap_or(-1) as i32;
+
     // Create profile key
     let key = EbpfProfileKey {
         pid: tgid,
         user_stack_id,
         kernel_stack_id,
     };
-    
+
     // Increment count
     let count = COUNTS.get(&key).copied().unwrap_or(0);
     let _ = COUNTS.insert(&key, &(count + 1), 0);
-    
+
     Ok(0)
 }
 

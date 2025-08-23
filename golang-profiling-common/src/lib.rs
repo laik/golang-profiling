@@ -1,7 +1,5 @@
 #![cfg_attr(not(feature = "user"), no_std)]
 
-
-
 /// Maximum number of stack frames to capture
 pub const MAX_STACK_DEPTH: usize = 127;
 
@@ -186,7 +184,7 @@ impl EnhancedFuncInfo {
     /// Format as symbol string for flame graph
     pub fn format_symbol(&self) -> String {
         let func_name = self.get_function_name().unwrap_or("[unknown]");
-        
+
         if let (Some(file), Some(line)) = (self.get_file_path(), self.get_line_number()) {
             if let Some(column) = self.column {
                 format!("{}:{}:{} {}", file, line, column, func_name)
@@ -206,7 +204,7 @@ pub mod user {
     use std::collections::HashMap;
     use std::string::String;
     use std::vec::Vec;
-    
+
     /// Flame graph node
     #[derive(Debug, Clone)]
     pub struct FlameNode {
@@ -214,7 +212,7 @@ pub mod user {
         pub value: u64,
         pub children: std::collections::HashMap<String, FlameNode>,
     }
-    
+
     impl FlameNode {
         pub fn new(name: String) -> Self {
             Self {
@@ -223,17 +221,18 @@ pub mod user {
                 children: std::collections::HashMap::new(),
             }
         }
-        
+
         pub fn add_sample(&mut self, stack: &[String], value: u64) {
             self.value += value;
             if let Some((first, rest)) = stack.split_first() {
-                let child = self.children.entry(first.clone()).or_insert_with(|| {
-                    FlameNode::new(first.clone())
-                });
+                let child = self
+                    .children
+                    .entry(first.clone())
+                    .or_insert_with(|| FlameNode::new(first.clone()));
                 child.add_sample(rest, value);
             }
         }
-        
+
         pub fn to_folded(&self, prefix: &str) -> Vec<String> {
             let mut result = Vec::new();
             let current_name = if prefix.is_empty() {
@@ -241,7 +240,7 @@ pub mod user {
             } else {
                 format!("{};{}", prefix, self.name)
             };
-            
+
             if self.children.is_empty() {
                 result.push(format!("{} {}", current_name, self.value));
             } else {
