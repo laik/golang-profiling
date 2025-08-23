@@ -53,22 +53,22 @@ unsafe fn try_golang_profile(ctx: PerfEventContext) -> Result<u32, u32> {
     }
 
     // Check if we have a target PID configured and filter accordingly
-    if let Some(target_pid) = TARGET_PID.get(0) {
-        // Debug output disabled for production use
-        // info!(&ctx, "Current PID: {}, Target PID: {}", tgid, *target_pid);
-
-        // If target_pid is 0, it means no filtering (profile all processes)
-        // Otherwise, only profile the specified PID
-        if *target_pid != 0 && tgid != *target_pid {
+    let target_pid = match TARGET_PID.get(0) {
+        Some(pid) => pid,
+        None => {
+            // No target PID configured, skip profiling
             return Ok(0);
         }
+    };
 
-        // Debug: print when we match the target PID
-        if *target_pid != 0 && tgid == *target_pid {
-            // bpf_printk!("Matched target PID: %u", tgid);
-        }
+    // Debug output disabled for production use
+    // info!(&ctx, "Current PID: {}, Target PID: {}", tgid, *target_pid);
+
+    // If target_pid is 0, it means no filtering (profile all processes)
+    // Otherwise, only profile the specified PID
+    if *target_pid != 0 && tgid != *target_pid {
+        return Ok(0);
     }
-    // If TARGET_PID.get(0) returns None, we allow all processes (no filtering)
 
     // Get stack traces
     let user_stack_id = STACK_TRACES
