@@ -1,5 +1,46 @@
 # CHANGELOG
 
+## [v0.3.0] - 2025-08-23
+
+### Added
+- **Off-CPU Profiling Support**
+  - Implemented comprehensive off-CPU performance analysis functionality
+  - Added `sched_switch` tracepoint handling for capturing process scheduling events
+  - Support for mixed analysis mode collecting both on-CPU and off-CPU data simultaneously
+  - Added timestamp recording and duration calculation capabilities
+
+### Enhanced
+- **eBPF Data Structure Optimization**
+  - Extended `EbpfProfileKey` with `sample_type` field to distinguish on-CPU and off-CPU events
+  - Added memory alignment padding `_padding: [0; 3]` ensuring cross-platform consistency
+  - Optimized data aggregation logic to support multiple sampling types
+
+### Testing & Validation
+- **Comprehensive Test Programs**
+  - Created `test_offcpu.go` specifically for off-CPU analysis testing
+  - Created `test_mixed.go` for mixed analysis mode testing
+  - Verified flame graph generation accuracy and completeness
+
+### Technical Details
+- **eBPF Program Enhancements**
+  - Implemented `sched_switch` tracepoint hook functions
+  - Added process state tracking and timestamp management
+  - Optimized stack collection logic for different sampling scenarios
+
+### Analysis & Problem Solving
+- **Flame Graph Display Issues**
+  - Analyzed sampling frequency impact on function visibility (default 99 Hz)
+  - Identified why functions with longer off-CPU times may not appear in on-CPU flame graphs
+  - Provided optimization recommendations for higher sampling frequency and extended analysis duration
+
+### Memory Alignment Principles
+- **eBPF Structure Alignment**
+  - Detailed explanation of `_padding` field importance in eBPF programs
+  - Elaborated on memory alignment impact on hardware access efficiency, eBPF verifier requirements, and cross-platform compatibility
+  - Emphasized the importance of hash consistency when used as HashMap keys
+
+---
+
 ## [v0.2.0] - 2025-08-22
 
 ### Added

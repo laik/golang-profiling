@@ -54,6 +54,10 @@ pub struct EbpfProfileKey {
     pub user_stack_id: i32,
     /// Kernel stack ID from stack trace map
     pub kernel_stack_id: i32,
+    /// Sample type (on-cpu or off-cpu)
+    pub sample_type: u8,
+    /// Padding for alignment (3 bytes)
+    pub _padding: [u8; 3],
 }
 
 /// Complete profile aggregation key for userspace processing
@@ -70,6 +74,8 @@ pub struct ProfileKey {
     pub kernel_stack_id: i32,
     /// Process name (TASK_COMM_LEN = 16)
     pub name: [u8; 16],
+    /// Sample type (on-cpu or off-cpu)
+    pub sample_type: u8,
 }
 
 /// Golang runtime information

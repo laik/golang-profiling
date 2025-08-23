@@ -7,7 +7,7 @@ use aya::{
 };
 use aya_log::EbpfLogger;
 use clap::Parser;
-use golang_profiling_common::{EbpfProfileKey, GoRuntimeInfo, ProfileKey};
+use golang_profiling_common::{EbpfProfileKey, GoRuntimeInfo, ProfileKey, SAMPLE_TYPE_ON_CPU, SAMPLE_TYPE_OFF_CPU};
 use log::{error, info, warn};
 use std::{
     collections::HashMap,
@@ -271,7 +271,9 @@ async fn main() -> anyhow::Result<()> {
     let stack_traces_map = stack_traces_map_guard.as_ref().unwrap();
 
     // Convert aggregated data to format compatible with FlameGraph tools
-    let mut converted_data = HashMap::new();
+    // Separate on-CPU and off-CPU data for different visualization
+    let mut on_cpu_data = HashMap::new();
+    let mut off_cpu_data = HashMap::new();
 
     for (profile_key, count) in &aggregated_counts {
         // Get stack traces for this profile key
@@ -301,8 +303,33 @@ async fn main() -> anyhow::Result<()> {
         }
 
         if !stack.is_empty() {
-            converted_data.insert(stack, *count);
+            // Separate data based on sample type
+            if profile_key.sample_type == SAMPLE_TYPE_OFF_CPU {
+                off_cpu_data.insert(stack, *count);
+            } else {
+                on_cpu_data.insert(stack, *count);
+            }
         }
+    }
+
+    // Combine data for flame graph generation, with off-CPU events marked
+    let mut converted_data = on_cpu_data.clone();
+    for (stack, count) in off_cpu_data.clone() {
+        converted_data.insert(stack, count);
+    }
+
+    // Log final statistics
+    let on_cpu_count: u64 = on_cpu_data.values().sum();
+    let off_cpu_count: u64 = off_cpu_data.values().sum();
+    let total_count = on_cpu_count + off_cpu_count;
+    
+    if off_cpu_count > 0 {
+        info!(
+            "Final statistics: {} total samples (on-CPU: {}, off-CPU: {})",
+            total_count, on_cpu_count, off_cpu_count
+        );
+    } else {
+        info!("Final statistics: {} on-CPU samples", total_count);
     }
 
     let exporter = FlameGraphExporter::new()?;
@@ -396,6 +423,8 @@ async fn read_aggregated_counts(
         // Read all entries from the COUNTS map (now filtered by target PID in eBPF)
         let mut current_counts = HashMap::new();
         let mut total_samples = 0u64;
+        let mut on_cpu_samples = 0u64;
+        let mut off_cpu_samples = 0u64;
 
         // Iterate through all entries in the eBPF map
         for item in counts_map.iter() {
@@ -407,10 +436,18 @@ async fn read_aggregated_counts(
                     user_stack_id: ebpf_key.user_stack_id,
                     kernel_stack_id: ebpf_key.kernel_stack_id,
                     name: [0u8; 16],
+                    sample_type: ebpf_key.sample_type,
                 };
 
                 current_counts.insert(profile_key, value);
                 total_samples += value;
+                
+                // Count samples by type
+                if ebpf_key.sample_type == SAMPLE_TYPE_OFF_CPU {
+                    off_cpu_samples += value;
+                } else {
+                    on_cpu_samples += value;
+                }
             }
         }
 
@@ -423,10 +460,17 @@ async fn read_aggregated_counts(
             static ITERATION_COUNT: AtomicU64 = AtomicU64::new(0);
             let count = ITERATION_COUNT.fetch_add(1, Ordering::Relaxed);
             if count % 100 == 0 {
-                info!(
-                    "Collected {} samples from target PID (eBPF filtered)",
-                    total_samples
-                );
+                if off_cpu_samples > 0 {
+                    info!(
+                        "Collected {} samples (on-CPU: {}, off-CPU: {}) from target PID",
+                        total_samples, on_cpu_samples, off_cpu_samples
+                    );
+                } else {
+                    info!(
+                        "Collected {} on-CPU samples from target PID",
+                        total_samples
+                    );
+                }
             }
         } else {
             // Log when no data is collected
