@@ -10,26 +10,26 @@ import (
 	"github.com/withlin/kubectl-pprof/pkg/config"
 )
 
-// Discovery 容器发现服务
+// Discovery container discovery service
 type Discovery struct {
 	k8sConfig *config.KubernetesConfig
 }
 
-// NewDiscovery 创建新的发现服务
+// NewDiscovery creates a new discovery service
 func NewDiscovery(k8sConfig *config.KubernetesConfig) (*Discovery, error) {
 	return &Discovery{
 		k8sConfig: k8sConfig,
 	}, nil
 }
 
-// FindPod 查找Pod
+// FindPod finds Pod
 func (d *Discovery) FindPod(ctx context.Context, namespace, podName string) (*corev1.Pod, error) {
 	pod, err := d.k8sConfig.Clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod %s/%s: %w", namespace, podName, err)
 	}
 
-	// 验证Pod状态
+	// Validate Pod status
 	if pod.Status.Phase != corev1.PodRunning {
 		return nil, fmt.Errorf("pod %s/%s is not running (phase: %s)", namespace, podName, pod.Status.Phase)
 	}
@@ -37,9 +37,9 @@ func (d *Discovery) FindPod(ctx context.Context, namespace, podName string) (*co
 	return pod, nil
 }
 
-// FindContainer 查找容器
+// FindContainer finds container
 func (d *Discovery) FindContainer(pod *corev1.Pod, containerName string) (*corev1.Container, error) {
-	// 如果没有指定容器名，使用第一个容器
+	// If no container name specified, use the first container
 	if containerName == "" {
 		if len(pod.Spec.Containers) == 0 {
 			return nil, fmt.Errorf("no containers found in pod %s/%s", pod.Namespace, pod.Name)
@@ -47,7 +47,7 @@ func (d *Discovery) FindContainer(pod *corev1.Pod, containerName string) (*corev
 		return &pod.Spec.Containers[0], nil
 	}
 
-	// 查找指定的容器
+	// Find the specified container
 	for _, container := range pod.Spec.Containers {
 		if container.Name == containerName {
 			return &container, nil

@@ -56,3 +56,5 @@ doc/
 test_*.svg
 test_*.folded
 test_embedded*
+
+.traeai/

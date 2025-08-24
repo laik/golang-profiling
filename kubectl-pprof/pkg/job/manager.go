@@ -1,11 +1,14 @@
 package job
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,383 +16,547 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/withlin/kubectl-pprof/internal/types"
 	"github.com/withlin/kubectl-pprof/pkg/config"
 )
 
-// Manager Job管理器
+// Manager simplified Job manager
 type Manager struct {
 	k8sConfig *config.KubernetesConfig
+	cleaner   *JobCleaner
 }
 
-// NewManager 创建新的Job管理器
+// NewManager creates a new Job manager
 func NewManager(k8sConfig *config.KubernetesConfig) (*Manager, error) {
+	// Create cleaner
+	cleaner := NewJobCleaner(k8sConfig.Clientset, nil, nil)
+
 	return &Manager{
 		k8sConfig: k8sConfig,
+		cleaner:   cleaner,
 	}, nil
 }
 
-// CreateProfilingJob 创建性能分析Job
-func (m *Manager) CreateProfilingJob(ctx context.Context, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) (string, error) {
-	// 生成Job名称
-	jobName := fmt.Sprintf("%s-%d", cfg.JobName, time.Now().Unix())
+// CreateProfilingJobWithMonitoring creates a profiling Job and monitors execution
+func (m *Manager) CreateProfilingJobWithMonitoring(ctx context.Context, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) (*types.ProfileResult, error) {
+	// Generate Job name
+	jobName := fmt.Sprintf("kubectl-pprof-%d", time.Now().Unix())
 
-	// 创建Job规范
+	// Create Job
 	job := m.buildJobSpec(jobName, cfg, opts, target)
-
-	// 创建Job
 	_, err := m.k8sConfig.Clientset.BatchV1().Jobs(cfg.Namespace).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to create job: %w", err)
+		return nil, fmt.Errorf("failed to create job: %w", err)
 	}
 
-	return jobName, nil
-}
-
-// buildJobSpec 构建Job规范
-func (m *Manager) buildJobSpec(jobName string, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) *batchv1.Job {
-	// 构建命令参数
-	args := m.buildProfilingArgs(cfg, opts, target)
-
-	// 构建容器规范
-	container := corev1.Container{
-		Name:  "profiler",
-		Image: cfg.Image,
-		Args:  args,
-		SecurityContext: &corev1.SecurityContext{
-			Privileged: &cfg.Privileged,
-		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "proc",
-				MountPath: "/host/proc",
-				ReadOnly:  true,
-			},
-			{
-				Name:      "sys",
-				MountPath: "/host/sys",
-				ReadOnly:  true,
-			},
-		},
+	// Wait for Job completion, decide whether to print logs based on PrintLogs parameter
+	var status *types.JobStatus
+	if opts.PrintLogs {
+		status, err = m.WaitForCompletionWithLogs(ctx, jobName, cfg.Namespace, 5*time.Minute)
+	} else {
+		status, err = m.WaitForCompletion(ctx, jobName, cfg.Namespace, 5*time.Minute)
 	}
-
-	// 设置资源限制
-	if cfg.ResourceLimits != nil {
-		container.Resources = corev1.ResourceRequirements{
-			Limits: corev1.ResourceList{},
-		}
-		if cfg.ResourceLimits.CPU != "" {
-			// TODO: 解析CPU限制
-		}
-		if cfg.ResourceLimits.Memory != "" {
-			// TODO: 解析内存限制
-		}
-	}
-
-	// 设置环境变量
-	for k, v := range cfg.EnvVars {
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  k,
-			Value: v,
-		})
-	}
-
-	// 构建Pod规范
-	podSpec := corev1.PodSpec{
-		RestartPolicy: corev1.RestartPolicyNever,
-		Containers:    []corev1.Container{container},
-		Volumes: []corev1.Volume{
-			{
-				Name: "proc",
-				VolumeSource: corev1.VolumeSource{
-					HostPath: &corev1.HostPathVolumeSource{
-						Path: "/proc",
-					},
-				},
-			},
-			{
-				Name: "sys",
-				VolumeSource: corev1.VolumeSource{
-					HostPath: &corev1.HostPathVolumeSource{
-						Path: "/sys",
-					},
-				},
-			},
-		},
-		NodeSelector: map[string]string{},
-	}
-
-	// 设置节点选择器
-	if cfg.NodeName != "" {
-		podSpec.NodeSelector["kubernetes.io/hostname"] = cfg.NodeName
-	} else if target.NodeName != "" {
-		podSpec.NodeSelector["kubernetes.io/hostname"] = target.NodeName
-	}
-
-	// 设置PID命名空间共享
-	podSpec.ShareProcessNamespace = &[]bool{true}[0]
-
-	// 构建Job
-	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: cfg.Namespace,
-			Labels: map[string]string{
-				"app":                          "kubectl-pprof",
-				"kubectl-pprof/job":            jobName,
-				"kubectl-pprof/target-pod":     target.PodName,
-				"kubectl-pprof/target-container": target.ContainerName,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			Template: corev1.PodTemplateSpec{
-				Spec: podSpec,
-			},
-			BackoffLimit: &[]int32{0}[0],
-		},
-	}
-}
-
-// buildProfilingArgs 构建分析参数
-func (m *Manager) buildProfilingArgs(cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) []string {
-	args := []string{
-		"--type", cfg.ProfileType,
-		"--duration", cfg.Duration.String(),
-		"--output", "/tmp/profile.svg",
-		"--target-pid", "1", // TODO: 获取实际的目标PID
-	}
-
-	// 添加输出格式
-	if opts.OutputFormat != "" {
-		args = append(args, "--format", opts.OutputFormat)
-	}
-
-	// 添加采样率
-	if opts.SampleRate > 0 {
-		args = append(args, "--sample-rate", fmt.Sprintf("%d", opts.SampleRate))
-	}
-
-	// 添加栈深度
-	if opts.StackDepth > 0 {
-		args = append(args, "--stack-depth", fmt.Sprintf("%d", opts.StackDepth))
-	}
-
-	// 添加过滤器
-	if opts.FilterPattern != "" {
-		args = append(args, "--filter", opts.FilterPattern)
-	}
-
-	// 添加忽略模式
-	if opts.IgnorePattern != "" {
-		args = append(args, "--ignore", opts.IgnorePattern)
-	}
-
-	// 添加额外参数
-	args = append(args, cfg.ExtraArgs...)
-
-	return args
-}
-
-// WaitForCompletion 等待Job完成
-func (m *Manager) WaitForCompletion(ctx context.Context, jobName string, timeout time.Duration) (*types.JobStatus, error) {
-	// 创建超时上下文
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// 等待Job完成
-	err := wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		job, err := m.k8sConfig.Clientset.BatchV1().Jobs(m.k8sConfig.Namespace).Get(ctx, jobName, metav1.GetOptions{})
-		if err != nil {
-			return false, err
-		}
-
-		// 检查Job状态
-		for _, condition := range job.Status.Conditions {
-			if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
-				return true, nil
-			}
-			if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
-				return false, fmt.Errorf("job failed: %s", condition.Message)
-			}
-		}
-
-		return false, nil
-	})
-
 	if err != nil {
-		return nil, fmt.Errorf("job did not complete: %w", err)
+		return nil, fmt.Errorf("job execution failed: %w", err)
 	}
 
-	// 获取最终状态
-	return m.GetJobStatus(ctx, jobName)
+	// Extract flame graph content from logs (temporarily commented out to simplify implementation)
+	// flameGraphData, err := m.extractFlameGraphFromLogs(ctx, jobName, cfg.Namespace)
+	// if err != nil {
+	//	return nil, fmt.Errorf("failed to extract flamegraph from logs: %w", err)
+	// }
+
+	// Clean up Job
+	go func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		m.DeleteJob(cleanupCtx, jobName, cfg.Namespace)
+	}()
+
+	return &types.ProfileResult{
+		JobName:   jobName,
+		JobStatus: status,
+		Success:   status.Phase == types.JobPhaseSucceeded,
+	}, nil
 }
 
-// GetJobStatus 获取Job状态
-func (m *Manager) GetJobStatus(ctx context.Context, jobName string) (*types.JobStatus, error) {
-	job, err := m.k8sConfig.Clientset.BatchV1().Jobs(m.k8sConfig.Namespace).Get(ctx, jobName, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get job: %w", err)
-	}
-
-	status := &types.JobStatus{
-		JobName: jobName,
-		Phase:   types.JobPhaseRunning,
-	}
-
-	// 设置开始时间
-	if job.Status.StartTime != nil {
-		status.StartTime = &job.Status.StartTime.Time
-	}
-
-	// 设置完成时间
-	if job.Status.CompletionTime != nil {
-		status.EndTime = &job.Status.CompletionTime.Time
-	}
-
-	// 检查Job状态
-	for _, condition := range job.Status.Conditions {
-		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
-			status.Phase = types.JobPhaseSucceeded
-		}
-		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
-			status.Phase = types.JobPhaseFailed
-			status.Message = condition.Message
-		}
-	}
-
-	return status, nil
-}
-
-// GetJobOutput 获取Job输出
-func (m *Manager) GetJobOutput(ctx context.Context, jobName string) ([]byte, error) {
-	// 获取Job关联的Pod
-	pods, err := m.k8sConfig.Clientset.CoreV1().Pods(m.k8sConfig.Namespace).List(ctx, metav1.ListOptions{
+// extractFlameGraphFromLogs extracts flame graph content from Pod logs
+func (m *Manager) extractFlameGraphFromLogs(ctx context.Context, jobName, namespace string) ([]byte, error) {
+	// Get Pods associated with the Job
+	pods, err := m.k8sConfig.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list job pods: %w", err)
+		return nil, fmt.Errorf("failed to list pods: %w", err)
 	}
 
 	if len(pods.Items) == 0 {
 		return nil, fmt.Errorf("no pods found for job %s", jobName)
 	}
 
-	// 使用第一个Pod
 	pod := pods.Items[0]
-	if pod.Status.Phase != corev1.PodSucceeded {
-		return nil, fmt.Errorf("pod %s is not in succeeded state: %s", pod.Name, pod.Status.Phase)
-	}
 
-	// 方法1: 通过kubectl cp获取文件
-	data, err := m.copyFileFromPod(ctx, pod.Name, "/tmp/profile.svg")
-	if err != nil {
-		// 方法2: 通过Pod日志获取base64编码的文件内容
-		return m.getOutputFromLogs(ctx, pod.Name)
-	}
-
-	return data, nil
-}
-
-// ListJobs 列出Job
-func (m *Manager) ListJobs(ctx context.Context, namespace string) ([]*types.JobStatus, error) {
-	jobs, err := m.k8sConfig.Clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=kubectl-pprof",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list jobs: %w", err)
-	}
-
-	var result []*types.JobStatus
-	for _, job := range jobs.Items {
-		status, err := m.GetJobStatus(ctx, job.Name)
-		if err != nil {
-			continue
-		}
-		result = append(result, status)
-	}
-
-	return result, nil
-}
-
-// DeleteJob 删除Job
-func (m *Manager) DeleteJob(ctx context.Context, jobName string) error {
-	propagationPolicy := metav1.DeletePropagationForeground
-	return m.k8sConfig.Clientset.BatchV1().Jobs(m.k8sConfig.Namespace).Delete(ctx, jobName, metav1.DeleteOptions{
-		PropagationPolicy: &propagationPolicy,
-	})
-}
-
-// copyFileFromPod 从Pod中复制文件
-func (m *Manager) copyFileFromPod(ctx context.Context, podName, filePath string) ([]byte, error) {
-	// 执行cat命令读取文件内容
-	cmd := []string{"cat", filePath}
-	req := m.k8sConfig.Clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(podName).
-		Namespace(m.k8sConfig.Namespace).
-		SubResource("exec")
-
-	req.VersionedParams(&corev1.PodExecOptions{
-		Command: cmd,
-		Stdout:  true,
-		Stderr:  true,
-	}, scheme.ParameterCodec)
-
-	exec, err := remotecommand.NewSPDYExecutor(m.k8sConfig.Config, "POST", req.URL())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create executor: %w", err)
-	}
-
-	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &stdout,
-		Stderr: &stderr,
+	// Get Pod logs
+	req := m.k8sConfig.Clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+		Container: "profiler",
 	})
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute command: %w, stderr: %s", err, stderr.String())
-	}
-
-	if stderr.Len() > 0 {
-		return nil, fmt.Errorf("command failed with stderr: %s", stderr.String())
-	}
-
-	return stdout.Bytes(), nil
-}
-
-// getOutputFromLogs 从Pod日志获取输出
-func (m *Manager) getOutputFromLogs(ctx context.Context, podName string) ([]byte, error) {
-	// 获取Pod日志
-	req := m.k8sConfig.Clientset.CoreV1().Pods(m.k8sConfig.Namespace).GetLogs(podName, &corev1.PodLogOptions{})
 	logs, err := req.Stream(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pod logs: %w", err)
 	}
 	defer logs.Close()
 
-	// 读取日志内容
-	logData, err := io.ReadAll(logs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read logs: %w", err)
-	}
+	// Parse logs to find flame graph content
+	scanner := bufio.NewScanner(logs)
+	var flameGraphContent strings.Builder
+	inFlameGraph := false
 
-	// 查找base64编码的文件内容
-	// 假设golang-profiling工具会在日志中输出: "FLAMEGRAPH_DATA: <base64_encoded_data>"
-	logStr := string(logData)
-	lines := strings.Split(logStr, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "FLAMEGRAPH_DATA: ") {
-			base64Data := strings.TrimPrefix(line, "FLAMEGRAPH_DATA: ")
-			data, err := base64.StdEncoding.DecodeString(base64Data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode base64 data: %w", err)
+	// Define flame graph start and end markers
+	flameGraphStartPattern := regexp.MustCompile(`^FLAMEGRAPH_START:(.*)$`)
+	flameGraphEndPattern := regexp.MustCompile(`^FLAMEGRAPH_END$`)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if matches := flameGraphStartPattern.FindStringSubmatch(line); matches != nil {
+			// Found flame graph start marker
+			inFlameGraph = true
+			if len(matches) > 1 && matches[1] != "" {
+				// If start marker contains content, add to flame graph
+				flameGraphContent.WriteString(matches[1])
 			}
-			return data, nil
+			continue
+		}
+
+		if flameGraphEndPattern.MatchString(line) {
+			// Found flame graph end marker
+			inFlameGraph = false
+			break
+		}
+
+		if inFlameGraph {
+			// In flame graph content area, collect all lines
+			flameGraphContent.WriteString(line)
+			flameGraphContent.WriteString("\n")
 		}
 	}
 
-	return nil, fmt.Errorf("no flamegraph data found in logs")
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading logs: %w", err)
+	}
+
+	if flameGraphContent.Len() == 0 {
+		return nil, fmt.Errorf("no flamegraph content found in logs")
+	}
+
+	// Decode base64 content and decompress gzip
+	content := strings.TrimSpace(flameGraphContent.String())
+	if content == "" {
+		return nil, fmt.Errorf("empty flamegraph content")
+	}
+
+	// Decode base64
+	decodedData, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode base64 content: %w", err)
+	}
+
+	// Decompress gzip
+	gzipReader, err := gzip.NewReader(bytes.NewReader(decodedData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gzipReader.Close()
+
+	// Read decompressed content
+	decompressedData, err := io.ReadAll(gzipReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress gzip content: %w", err)
+	}
+
+	return decompressedData, nil
+}
+
+// buildJobSpec builds Job specification
+func (m *Manager) buildJobSpec(jobName string, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) *batchv1.Job {
+	// Build profiling script
+	script := m.buildAdvancedProfilingScript(target, cfg)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: cfg.Namespace,
+			Labels: map[string]string{
+				"app": "kubectl-pprof",
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &[]int32{0}[0],
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "kubectl-pprof",
+					},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					HostPID:       true,
+					NodeSelector: map[string]string{
+						"kubernetes.io/hostname": target.NodeName,
+					},
+					Tolerations: []corev1.Toleration{
+						{
+							Operator: corev1.TolerationOpExists,
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:            "profiler",
+							Image:           cfg.Image,
+							Command:         []string{"/bin/sh"},
+							Args:            []string{"-c", script},
+							ImagePullPolicy: corev1.PullIfNotPresent,
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: &[]bool{true}[0],
+								RunAsUser:  &[]int64{0}[0],
+								Capabilities: &corev1.Capabilities{
+									Add: []corev1.Capability{
+										"SYS_ADMIN",
+										"SYS_RESOURCE",
+										"SYS_PTRACE",
+										"BPF",
+										"PERFMON",
+									},
+								},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "proc",
+									MountPath: "/host/proc",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "sys",
+									MountPath: "/host/sys",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "containerd-sock",
+									MountPath: "/run/containerd/containerd.sock",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "crictl-bin",
+									MountPath: "/usr/local/bin/crictl",
+									ReadOnly:  true,
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "proc",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/proc",
+								},
+							},
+						},
+						{
+							Name: "sys",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/sys",
+								},
+							},
+						},
+						{
+							Name: "containerd-sock",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/run/containerd/containerd.sock",
+								},
+							},
+						},
+						{
+							Name: "crictl-bin",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/usr/bin/crictl",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return job
+}
+
+// buildProfilingArgs builds profiling arguments
+func (m *Manager) buildProfilingArgs(cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) []string {
+	args := []string{
+		"--pid", fmt.Sprintf("%d", target.PID),
+		"--duration", fmt.Sprintf("%.0f", cfg.Duration.Seconds()),
+	}
+
+	if cfg.GoOptions != nil && cfg.GoOptions.Frequency > 0 {
+		args = append(args, "--frequency", fmt.Sprintf("%d", cfg.GoOptions.Frequency))
+	}
+
+	if cfg.GoOptions != nil && cfg.GoOptions.Width > 0 {
+		args = append(args, "--width", fmt.Sprintf("%d", cfg.GoOptions.Width))
+	}
+
+	if cfg.GoOptions != nil && cfg.GoOptions.Height > 0 {
+		args = append(args, "--height", fmt.Sprintf("%d", cfg.GoOptions.Height))
+	}
+
+	return args
+}
+
+// buildAdvancedProfilingScript builds advanced profiling script
+func (m *Manager) buildAdvancedProfilingScript(target *types.TargetInfo, cfg *types.ProfileConfig) string {
+	// Convert duration to seconds
+	durationSeconds := int(cfg.Duration.Seconds())
+
+	return fmt.Sprintf(`		
+		# Get target container ID (using grep to match container name)
+		CONTAINER_ID=$(crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps | grep -w "%s" | awk '{print $1}' | head -1)
+		if [ -z "$CONTAINER_ID" ]; then
+			echo "Error: Container %s not found"
+			echo "Available containers:"
+			crictl --runtime-endpoint unix:///run/containerd/containerd.sock ps
+			exit 1
+		fi
+		
+		echo "Found container ID: $CONTAINER_ID"
+		
+		# Get container PID
+		CONTAINER_PID=$(crictl --runtime-endpoint unix:///run/containerd/containerd.sock inspect "$CONTAINER_ID" | grep '"pid"' | head -1 | awk '{print $2}' | tr -d ',')
+		if [ -z "$CONTAINER_PID" ]; then
+			echo "Error: Cannot get PID for container $CONTAINER_ID"
+			exit 1
+		fi
+		
+		echo "Found target container PID: $CONTAINER_PID"
+		
+		# Check if PID exists
+		if [ ! -d "/host/proc/$CONTAINER_PID" ]; then
+			echo "Error: Process $CONTAINER_PID not found in /host/proc"
+			echo "Available processes:"
+			ls /host/proc/ | grep '^[0-9]*$' | head -10
+			exit 1
+		fi
+		
+		# Use nsenter to enter target container namespace and run profiling
+		# Need to use host proc filesystem
+		PROC_PATH="/host/proc/$CONTAINER_PID"
+		if [ ! -d "$PROC_PATH/ns" ]; then
+			echo "Error: Cannot access namespace files at $PROC_PATH/ns"
+			echo "Available proc entries:"
+			ls /host/proc/ | grep '^[0-9]*$' | head -5
+			exit 1
+		fi
+		
+		# Run golang-profiling directly on host, specifying target PID
+		# Set PROC_ROOT environment variable to point to host proc filesystem
+		export PROC_ROOT=/host/proc
+		echo "Starting golang-profiling with arguments: --pid $CONTAINER_PID --duration %d --output /tmp/profile.svg"
+		/usr/local/bin/golang-profiling --pid $CONTAINER_PID --duration %d --output /tmp/profile.svg
+		PROFILE_EXIT_CODE=$?
+		echo "golang-profiling exit code: $PROFILE_EXIT_CODE"
+		if [ $PROFILE_EXIT_CODE -eq 0 ]; then
+			echo "Profiling completed successfully"
+			ls -la /tmp/profile.svg
+			
+			# Output flame graph content to logs (using gzip compression and base64 encoding)
+			echo -n "FLAMEGRAPH_START:"
+			gzip -c /tmp/profile.svg | base64 -w 0
+			echo ""
+			echo "FLAMEGRAPH_END"
+			
+			# Create completion marker file
+			echo "PROFILING_COMPLETED" > /tmp/profiling_done
+			echo "Profiling completed and flamegraph output to logs"
+		else
+			echo "Profiling failed with exit code: $PROFILE_EXIT_CODE"
+		fi
+	`, target.ContainerName, target.ContainerName, durationSeconds, durationSeconds)
+}
+
+// WaitForCompletion waits for Job completion
+func (m *Manager) WaitForCompletion(ctx context.Context, jobName string, namespace string, timeout time.Duration) (*types.JobStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var finalStatus *types.JobStatus
+	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		status, err := m.GetJobStatus(ctx, jobName, namespace)
+		if err != nil {
+			return false, err
+		}
+
+		finalStatus = status
+		switch status.Phase {
+		case types.JobPhaseSucceeded, types.JobPhaseFailed:
+			return true, nil
+		default:
+			return false, nil
+		}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return finalStatus, nil
+}
+
+// WaitForCompletionWithLogs waits for Job completion and prints logs in real time
+func (m *Manager) WaitForCompletionWithLogs(ctx context.Context, jobName string, namespace string, timeout time.Duration) (*types.JobStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Wait for Pod to start
+	var podName string
+	for i := 0; i < 30; i++ {
+		pods, err := m.k8sConfig.Clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("job-name=%s", jobName),
+		})
+		if err == nil && len(pods.Items) > 0 {
+			podName = pods.Items[0].Name
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	if podName == "" {
+		return nil, fmt.Errorf("failed to find pod for job %s", jobName)
+	}
+
+	fmt.Printf("📋 Streaming logs from pod %s...\n", podName)
+
+	// Start log streaming
+	go m.streamPodLogs(ctx, podName, namespace)
+
+	// Wait for Job completion
+	var finalStatus *types.JobStatus
+	err := wait.PollUntilContextCancel(ctx, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		status, err := m.GetJobStatus(ctx, jobName, namespace)
+		if err != nil {
+			return false, err
+		}
+
+		finalStatus = status
+		switch status.Phase {
+		case types.JobPhaseSucceeded, types.JobPhaseFailed:
+			return true, nil
+		default:
+			return false, nil
+		}
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println("📋 Log streaming completed.")
+	return finalStatus, nil
+}
+
+// streamPodLogs streams Pod logs
+func (m *Manager) streamPodLogs(ctx context.Context, podName, namespace string) {
+	// Wait for Pod to enter Running state
+	for i := 0; i < 60; i++ {
+		pod, err := m.k8sConfig.Clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err == nil && pod.Status.Phase == corev1.PodRunning {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1 * time.Second):
+		}
+	}
+
+	// Get log stream
+	req := m.k8sConfig.Clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Container: "profiler",
+		Follow:    true,
+	})
+
+	logs, err := req.Stream(ctx)
+	if err != nil {
+		fmt.Printf("Warning: failed to stream logs: %v\n", err)
+		return
+	}
+	defer logs.Close()
+
+	// Read and print logs
+	scanner := bufio.NewScanner(logs)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			fmt.Println(scanner.Text())
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Warning: error reading logs: %v\n", err)
+	}
+}
+
+// GetJobStatus gets Job status
+func (m *Manager) GetJobStatus(ctx context.Context, jobName string, namespace string) (*types.JobStatus, error) {
+	job, err := m.k8sConfig.Clientset.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get job: %w", err)
+	}
+
+	status := &types.JobStatus{
+		JobName:   job.Name,
+		Namespace: job.Namespace,
+		Phase:     types.JobPhaseRunning,
+	}
+
+	if job.Status.Succeeded > 0 {
+		status.Phase = types.JobPhaseSucceeded
+	} else if job.Status.Failed > 0 {
+		status.Phase = types.JobPhaseFailed
+	}
+
+	return status, nil
+}
+
+// DeleteJob deletes Job
+func (m *Manager) DeleteJob(ctx context.Context, jobName string, namespace string) error {
+	propagationPolicy := metav1.DeletePropagationForeground
+	return m.k8sConfig.Clientset.BatchV1().Jobs(namespace).Delete(ctx, jobName, metav1.DeleteOptions{
+		PropagationPolicy: &propagationPolicy,
+	})
+}
+
+// ExtractFlameGraphFromLogs public method for extracting flame graph from logs
+func (m *Manager) ExtractFlameGraphFromLogs(ctx context.Context, jobName, namespace string) ([]byte, error) {
+	return m.extractFlameGraphFromLogs(ctx, jobName, namespace)
+}
+
+// Test methods retained for compatibility
+func (m *Manager) BuildProfilingArgsForTest(cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) []string {
+	return m.buildProfilingArgs(cfg, opts, target)
+}
+
+func (m *Manager) BuildProfilingScriptForTest(target *types.TargetInfo, cfg *types.ProfileConfig) string {
+	return m.buildAdvancedProfilingScript(target, cfg)
+}
+
+func (m *Manager) BuildJobSpecForTest(jobName string, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) *batchv1.Job {
+	return m.buildJobSpec(jobName, cfg, opts, target)
 }

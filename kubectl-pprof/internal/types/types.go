@@ -5,30 +5,56 @@ import (
 	"time"
 )
 
-// ProfileConfig 性能分析配置
+// ProfileConfig represents the configuration for profiling operations
 type ProfileConfig struct {
-	// 目标信息
+	// Target information
 	Namespace     string `json:"namespace"`
 	PodName       string `json:"podName"`
 	ContainerName string `json:"containerName"`
+	PID           string `json:"pid,omitempty"` // Specific process ID to profile
 
-	// 分析参数
+	// Profiling parameters
 	Duration    time.Duration `json:"duration"`
-	ProfileType string        `json:"profileType"` // cpu, memory, goroutine, block
+	ProfileType string        `json:"profileType"` // cpu, memory, goroutine, block, mutex
 	OutputPath  string        `json:"outputPath"`
+	Language    string        `json:"language"` // go, java, python, etc.
 
-	// Job配置
-	JobName       string        `json:"jobName"`
-	Image         string        `json:"image"`
-	NodeName      string        `json:"nodeName,omitempty"`
-	Timeout       time.Duration `json:"timeout"`
-	Cleanup       bool          `json:"cleanup"`
-	Privileged    bool          `json:"privileged"`
+	// Job configuration
+	JobName         string        `json:"jobName"`
+	Image           string        `json:"image"`
+	ImagePullPolicy string        `json:"imagePullPolicy"` // Always, IfNotPresent, Never
+	NodeName        string        `json:"nodeName,omitempty"`
+	Timeout         time.Duration `json:"timeout"`
+	Cleanup         bool          `json:"cleanup"`
+	Privileged      bool          `json:"privileged"`
 
-	// 高级选项
-	ExtraArgs     []string          `json:"extraArgs,omitempty"`
-	EnvVars       map[string]string `json:"envVars,omitempty"`
-	ResourceLimits *ResourceLimits   `json:"resourceLimits,omitempty"`
+	// Advanced options
+    ExtraArgs     []string          `json:"extraArgs,omitempty"`
+    EnvVars       map[string]string `json:"envVars,omitempty"`
+    ResourceLimits *ResourceLimits   `json:"resourceLimits,omitempty"`
+    CrictlPath    string            `json:"crictlPath,omitempty"` // Path to crictl binary on the node
+
+	// Go-specific options
+	GoOptions *GoProfilingOptions `json:"goOptions,omitempty"`
+}
+
+// GoProfilingOptions Go language specific profiling options
+type GoProfilingOptions struct {
+	OffCPU       bool    `json:"offCpu,omitempty"`       // Enable off-CPU analysis
+	Frequency    int     `json:"frequency,omitempty"`    // Sampling frequency (Hz)
+	Title        string  `json:"title,omitempty"`        // Flame graph title
+	Subtitle     string  `json:"subtitle,omitempty"`     // Flame graph subtitle
+	Colors       string  `json:"colors,omitempty"`       // Color scheme
+	BgColors     string  `json:"bgColors,omitempty"`     // Background colors
+	Width        int     `json:"width,omitempty"`        // Image width
+	Height       int     `json:"height,omitempty"`       // Frame height
+	FontType     string  `json:"fontType,omitempty"`     // Font type
+	FontSize     float64 `json:"fontSize,omitempty"`     // Font size
+	Inverted     bool    `json:"inverted,omitempty"`     // Generate inverted icicle graph
+	FlameChart   bool    `json:"flameChart,omitempty"`   // Generate flame chart
+	Hash         bool    `json:"hash,omitempty"`         // Use hash-based colors
+	Random       bool    `json:"random,omitempty"`       // Use random colors
+	ExportFolded string  `json:"exportFolded,omitempty"` // Export folded stack file path
 }
 
 // ResourceLimits 资源限制
@@ -110,7 +136,7 @@ type ProfileResult struct {
 	Success    bool           `json:"success"`
 }
 
-// ContainerRuntime 容器运行时类型
+// ContainerRuntime represents container runtime types
 type ContainerRuntime string
 
 const (
@@ -118,6 +144,29 @@ const (
 	RuntimeDocker     ContainerRuntime = "docker"
 	RuntimeCRIO       ContainerRuntime = "cri-o"
 )
+
+// Language represents supported programming languages for profiling
+type Language string
+
+const (
+	LanguageGo     Language = "go"
+	LanguageJava   Language = "java"
+	LanguagePython Language = "python"
+	LanguageNode   Language = "node"
+	LanguageRust   Language = "rust"
+)
+
+// LanguageConfig contains language-specific profiling configuration
+type LanguageConfig struct {
+	Language           Language          `json:"language"`
+	SupportedTypes     []string          `json:"supportedTypes"`
+	DefaultType        string            `json:"defaultType"`
+	DefaultImage       string            `json:"defaultImage"`
+	ProfilerCommand    []string          `json:"profilerCommand"`
+	OutputFormats      []string          `json:"outputFormats"`
+	RequiredCapabilities []string        `json:"requiredCapabilities,omitempty"`
+	EnvironmentVars    map[string]string `json:"environmentVars,omitempty"`
+}
 
 // RuntimeInfo 运行时信息
 type RuntimeInfo struct {
@@ -167,6 +216,10 @@ type ProfileOptions struct {
 	StackDepth     int    `json:"stackDepth,omitempty"`
 	FilterPattern  string `json:"filterPattern,omitempty"`
 	IgnorePattern  string `json:"ignorePattern,omitempty"`
+
+	// UI选项
+	Quiet          bool   `json:"quiet"`
+	PrintLogs      bool   `json:"printLogs"`
 }
 
 // ErrorCode 错误代码

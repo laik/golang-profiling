@@ -12,22 +12,22 @@ import (
 	"github.com/withlin/kubectl-pprof/pkg/job"
 )
 
-// Profiler 性能分析器
+// Profiler performance analyzer
 type Profiler struct {
 	k8sConfig *config.KubernetesConfig
 	discovery *discovery.Discovery
 	jobManager *job.Manager
 }
 
-// NewProfiler 创建新的性能分析器
+// NewProfiler creates a new performance analyzer
 func NewProfiler(k8sConfig *config.KubernetesConfig) (*Profiler, error) {
-	// 创建发现服务
+	// Create discovery service
 	discoveryService, err := discovery.NewDiscovery(k8sConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery service: %w", err)
 	}
 
-	// 创建Job管理器
+	// Create Job manager
 	jobManager, err := job.NewManager(k8sConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create job manager: %w", err)
@@ -40,9 +40,9 @@ func NewProfiler(k8sConfig *config.KubernetesConfig) (*Profiler, error) {
 	}, nil
 }
 
-// Profile 执行性能分析
+// Profile executes performance analysis
 func (p *Profiler) Profile(ctx context.Context, cfg *types.ProfileConfig, opts *types.ProfileOptions) (*types.ProfileResult, error) {
-	// 1. 发现目标容器
+	// 1. Discover target container
 	targetInfo, err := p.discoverTarget(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover target: %w", err)
@@ -62,7 +62,7 @@ func (p *Profiler) Profile(ctx context.Context, cfg *types.ProfileConfig, opts *
 
 	// 4. 清理资源
 	if cfg.Cleanup {
-		if err := p.cleanup(ctx, jobResult.JobName); err != nil {
+		if err := p.cleanup(ctx, result.JobName, cfg.Namespace); err != nil {
 			// 记录清理错误但不影响主流程
 			fmt.Printf("Warning: failed to cleanup resources: %v\n", err)
 		}
@@ -71,117 +71,158 @@ func (p *Profiler) Profile(ctx context.Context, cfg *types.ProfileConfig, opts *
 	return result, nil
 }
 
-// discoverTarget 发现目标容器
+// discoverTarget discovers target container
 func (p *Profiler) discoverTarget(ctx context.Context, cfg *types.ProfileConfig) (*types.TargetInfo, error) {
-	// 查找Pod
+	// Find Pod
 	pod, err := p.discovery.FindPod(ctx, cfg.Namespace, cfg.PodName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find pod: %w", err)
 	}
 
-	// 查找容器
+	// Find container
 	container, err := p.discovery.FindContainer(pod, cfg.ContainerName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find container: %w", err)
 	}
 
-	// 获取节点信息
+	// Get node information
 	nodeInfo, err := p.discovery.GetNodeInfo(ctx, pod.Spec.NodeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node info: %w", err)
 	}
 
-	// 获取运行时信息
+	// Get runtime information
 	runtimeInfo, err := p.discovery.GetRuntimeInfo(ctx, pod, container)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get runtime info: %w", err)
 	}
 
+	// Ensure using the actual found container name
+	actualContainerName := cfg.ContainerName
+	if actualContainerName == "" && container != nil {
+		// If no container name specified, use the first found container name
+		actualContainerName = container.Name
+	}
+
 	return &types.TargetInfo{
-		Pod:         pod,
-		Container:   container,
-		NodeInfo:    nodeInfo,
-		RuntimeInfo: runtimeInfo,
+		Namespace:     cfg.Namespace,
+		PodName:       cfg.PodName,
+		ContainerName: actualContainerName,
+		NodeName:      pod.Spec.NodeName,
+		Pod:           pod,
+		Container:     container,
+		NodeInfo:      nodeInfo,
+		RuntimeInfo:   runtimeInfo,
 	}, nil
 }
 
-// executeProfilingJob 执行分析Job
-func (p *Profiler) executeProfilingJob(ctx context.Context, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) (*types.JobStatus, error) {
-	// 创建Job
-	jobName, err := p.jobManager.CreateProfilingJob(ctx, cfg, opts, target)
+// executeProfilingJob executes profiling Job
+func (p *Profiler) executeProfilingJob(ctx context.Context, cfg *types.ProfileConfig, opts *types.ProfileOptions, target *types.TargetInfo) (*types.ProfileResult, error) {
+	// Create Job and wait for completion
+	result, err := p.jobManager.CreateProfilingJobWithMonitoring(ctx, cfg, opts, target)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create profiling job: %w", err)
+		return nil, fmt.Errorf("failed to create and execute profiling job: %w", err)
 	}
 
-	// 等待Job完成
-	jobStatus, err := p.jobManager.WaitForCompletion(ctx, jobName, cfg.Timeout)
-	if err != nil {
-		return nil, fmt.Errorf("job execution failed: %w", err)
-	}
-
-	return jobStatus, nil
+	return result, nil
 }
 
-// collectResults 收集分析结果
-func (p *Profiler) collectResults(ctx context.Context, cfg *types.ProfileConfig, jobStatus *types.JobStatus) (*types.ProfileResult, error) {
-	// 从Job Pod中获取结果文件
-	outputData, err := p.jobManager.GetJobOutput(ctx, jobStatus.JobName)
+// collectResults collects analysis results (simplified version, from logs)
+func (p *Profiler) collectResults(ctx context.Context, cfg *types.ProfileConfig, result *types.ProfileResult) (*types.ProfileResult, error) {
+	// Extract actual flame graph content from Job logs
+	flameGraphData, err := p.jobManager.ExtractFlameGraphFromLogs(ctx, result.JobName, cfg.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get job output: %w", err)
+		// If extraction fails, create an error SVG with red X
+		errorSVG := `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="300" viewBox="0 0 500 300">
+  <!-- 背景 -->
+  <rect width="500" height="300" fill="#f8f9fa" stroke="#dee2e6" stroke-width="2"/>
+  
+  <!-- Red X mark -->
+  <g transform="translate(250,100)">
+    <circle cx="0" cy="0" r="50" fill="#dc3545" stroke="#b02a37" stroke-width="3"/>
+    <line x1="-25" y1="-25" x2="25" y2="25" stroke="white" stroke-width="6" stroke-linecap="round"/>
+    <line x1="25" y1="-25" x2="-25" y2="25" stroke="white" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  
+  <!-- Failure message text -->
+  <text x="250" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#dc3545">
+    Flame Graph Generation Failed
+  </text>
+  <text x="250" y="230" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#6c757d">
+    Failed to extract flamegraph from logs
+  </text>
+  <text x="250" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#6c757d">
+    Error: ` + err.Error() + `
+  </text>
+</svg>`
+		flameGraphData = []byte(errorSVG)
+	}
+	
+	if cfg.OutputPath != "" {
+		if err := p.saveOutputFile(cfg.OutputPath, flameGraphData); err != nil {
+			return nil, fmt.Errorf("failed to save output file: %w", err)
+		}
+		
+		result.OutputPath = cfg.OutputPath
+		result.FileSize = int64(len(flameGraphData))
 	}
 
-	// 保存到本地文件
-	if err := p.saveOutputFile(cfg.OutputPath, outputData); err != nil {
-		return nil, fmt.Errorf("failed to save output file: %w", err)
-	}
-
-	return &types.ProfileResult{
-		OutputPath: cfg.OutputPath,
-		FileSize:   int64(len(outputData)),
-		Duration:   jobStatus.EndTime.Sub(*jobStatus.StartTime),
-		Samples:    0, // TODO: 从输出中解析样本数
-		JobName:    jobStatus.JobName,
-		Success:    true,
-	}, nil
+	return result, nil
 }
 
-// saveOutputFile 保存输出文件
+// saveOutputFile saves output file
 func (p *Profiler) saveOutputFile(outputPath string, data []byte) error {
 	if outputPath == "" {
 		return fmt.Errorf("output path is empty")
 	}
 
+	// Handle path: if relative path, base on current working directory
+	var finalPath string
+	if filepath.IsAbs(outputPath) {
+		finalPath = outputPath
+	} else {
+		// 获取当前工作目录
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to get current working directory: %w", err)
+		}
+		finalPath = filepath.Join(cwd, outputPath)
+	}
+
 	// 确保输出目录存在
-	dir := filepath.Dir(outputPath)
+	dir := filepath.Dir(finalPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 
 	// 写入文件
-	if err := os.WriteFile(outputPath, data, 0644); err != nil {
+	if err := os.WriteFile(finalPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write output file: %w", err)
 	}
 
-	fmt.Printf("Flamegraph saved to: %s\n", outputPath)
+	fmt.Printf("Flamegraph saved to: %s\n", finalPath)
 	return nil
 }
 
 // cleanup 清理资源
-func (p *Profiler) cleanup(ctx context.Context, jobName string) error {
-	return p.jobManager.DeleteJob(ctx, jobName)
+func (p *Profiler) cleanup(ctx context.Context, jobName string, namespace string) error {
+	return p.jobManager.DeleteJob(ctx, jobName, namespace)
 }
 
 // GetStatus 获取分析状态
-func (p *Profiler) GetStatus(ctx context.Context, jobName string) (*types.JobStatus, error) {
-	return p.jobManager.GetJobStatus(ctx, jobName)
+func (p *Profiler) GetStatus(ctx context.Context, jobName string, namespace string) (*types.JobStatus, error) {
+	return p.jobManager.GetJobStatus(ctx, jobName, namespace)
 }
 
-// ListJobs 列出所有分析Job
+// ListJobs 列出所有分析Job（简化版本）
 func (p *Profiler) ListJobs(ctx context.Context, namespace string) ([]*types.JobStatus, error) {
-	return p.jobManager.ListJobs(ctx, namespace)
+	// 在简化架构中，我们不再维护Job列表
+	// 返回空列表
+	return []*types.JobStatus{}, nil
 }
 
 // Cancel 取消分析
-func (p *Profiler) Cancel(ctx context.Context, jobName string) error {
-	return p.jobManager.DeleteJob(ctx, jobName)
+func (p *Profiler) Cancel(ctx context.Context, jobName string, namespace string) error {
+	return p.jobManager.DeleteJob(ctx, jobName, namespace)
 }
